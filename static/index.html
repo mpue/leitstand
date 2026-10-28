@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Leitstand</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img src="/icon.svg" alt="" width="22" height="22">
+    <h1>Leitstand</h1>
+    <span class="host" id="host">…</span>
+  </div>
+  <div class="conn" id="conn"><span class="dot"></span><span class="label">verbinde…</span></div>
+</header>
+
+<main>
+  <section class="block" aria-labelledby="gpu-title">
+    <div class="block-head">
+      <h2 id="gpu-title">GPU</h2>
+      <span class="sub" id="gpu-name"></span>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <div class="charts">
+      <figure class="chart-card" id="chart-util">
+        <figcaption><span class="title">Auslastung</span><span class="now" data-now></span></figcaption>
+        <div class="plot"></div>
+      </figure>
+      <figure class="chart-card" id="chart-vram">
+        <figcaption><span class="title">VRAM</span><span class="legend" data-legend></span><span class="now" data-now></span></figcaption>
+        <div class="plot"></div>
+      </figure>
+      <figure class="chart-card" id="chart-power">
+        <figcaption><span class="title">Leistung</span><span class="now" data-now></span></figcaption>
+        <div class="plot"></div>
+      </figure>
+    </div>
+    <details class="table-view" id="table-view">
+      <summary>Letzte 10 Minuten als Tabelle</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Zeit</th><th>Auslastung</th><th>VRAM Ollama</th><th>VRAM ComfyUI</th><th>VRAM sonst</th><th>Leistung</th><th>Temperatur</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </details>
+  </section>
+
+  <div class="services">
+    <section class="block service" id="svc-ollama" aria-labelledby="ollama-title">
+      <div class="block-head">
+        <h2 id="ollama-title">Ollama</h2>
+        <span class="status" data-status></span>
+      </div>
+      <div class="meta" data-meta></div>
+      <div class="actions" data-actions></div>
+      <div class="log" data-log hidden><pre></pre></div>
+      <h3>Geladen</h3>
+      <div class="list" data-running></div>
+      <details class="installed">
+        <summary>Installierte Modelle <span class="count" data-installed-count></span></summary>
+        <div class="list" data-installed></div>
+      </details>
+    </section>
+
+    <section class="block service" id="svc-comfy" aria-labelledby="comfy-title">
+      <div class="block-head">
+        <h2 id="comfy-title">ComfyUI</h2>
+        <span class="status" data-status></span>
+      </div>
+      <div class="meta" data-meta></div>
+      <div class="actions" data-actions></div>
+      <div class="log" data-log hidden><pre></pre></div>
+      <h3>Im Speicher</h3>
+      <div class="list" data-loaded></div>
+      <h3 data-workflow-title>Letzter Workflow</h3>
+      <div class="list" data-workflow></div>
+    </section>
+  </div>
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/app.js"></script>
+</body>
+</html>
