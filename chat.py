@@ -30,6 +30,10 @@ CHAT_ID = re.compile(r"[0-9a-f]{32}")
 CHAT_PATH = re.compile(r"/chat/chats/([0-9a-f]{32})")
 IMAGE_PATH = re.compile(r"/chat/images/(" + imagegen.MEDIA_NAME.pattern + ")")
 IMAGES = DATA / "images"
+# KaTeX und highlight.js, je Version ein Verzeichnis: kein Teil beginnt mit einem Punkt
+VENDOR = PAGE.parent / "vendor"
+VENDOR_PATH = re.compile(r"/chat/vendor/((?:[\w-][\w.-]*/)*[\w-][\w.-]*\.(js|css|woff2))")
+VENDOR_TYPES = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8", "woff2": "font/woff2"}
 
 
 class ChatStore:
@@ -146,6 +150,8 @@ def handle(handler, ollama, comfy):
         web(handler, path.rsplit("/", 1)[1])
     elif (m := IMAGE_PATH.fullmatch(path)) and method == "GET":
         media(handler, IMAGES / m[1])
+    elif (m := VENDOR_PATH.fullmatch(path)) and method == "GET":
+        vendor(handler, VENDOR / m[1], VENDOR_TYPES[m[2]])
     elif path == "/chat/" and method == "GET":
         try:
             reply(handler, 200, PAGE.read_bytes(), "text/html; charset=utf-8")
@@ -200,6 +206,19 @@ def image(handler, ollama, comfy):
         pass  # Stopp oder Seite zu
     finally:
         states.close()   # bricht den Auftrag in ComfyUI ab, falls er noch laeuft
+
+
+def vendor(handler, path, ctype):
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return reply_json(handler, {"error": "Datei nicht gefunden"}, 404)
+    handler.send_response(200)
+    handler.send_header("Content-Type", ctype)
+    handler.send_header("Cache-Control", "public, max-age=31536000, immutable")   # die Version steht im Pfad
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
 
 
 def media(handler, path):

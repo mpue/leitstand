@@ -5,11 +5,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chat – Leitstand</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
+<!-- Formeln und Code (static/vendor): fehlen sie, bleibt TeX TeX und Code einfarbig -->
+<link rel="stylesheet" href="vendor/katex-0.19.0/katex.min.css">
+<script src="vendor/katex-0.19.0/katex.min.js"></script>
+<script src="vendor/katex-0.19.0/copy-tex.min.js"></script>
+<script src="vendor/highlight-11.12.0/highlight.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/glsl.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/cmake.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/dockerfile.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/powershell.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/latex.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/nix.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/x86asm.min.js"></script>
+<script src="vendor/highlight-11.12.0/languages/nginx.min.js"></script>
 <style>
 :root {
   --bg: #ffffff; --bg-side: #f6f5f3; --bg-soft: #eeede9; --bg-user: #e7edfb;
   --fg: #1c1c1a; --fg-soft: #6b6a66; --border: #e0ded9; --accent: #2f6fde; --danger: #c43c3c;
   --code-bg: #f7f6f4;
+  --hl-keyword: #cf222e; --hl-title: #8250df; --hl-constant: #0550ae; --hl-string: #0a3069; --hl-builtin: #953800;
+  --hl-comment: #6e7781; --hl-tag: #116329; --hl-bullet: #6c4f00;
+  --hl-add: #116329; --hl-add-bg: #dafbe1; --hl-del: #82071e; --hl-del-bg: #ffebe9;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -17,6 +33,9 @@
     --bg: #1c1c1b; --bg-side: #151514; --bg-soft: #2a2a28; --bg-user: #25324b;
     --fg: #e8e6e1; --fg-soft: #9d9b96; --border: #363531; --accent: #6f9ff5; --danger: #e46f6f;
     --code-bg: #121211;
+    --hl-keyword: #ff7b72; --hl-title: #d2a8ff; --hl-constant: #79c0ff; --hl-string: #a5d6ff; --hl-builtin: #ffa657;
+    --hl-comment: #8b949e; --hl-tag: #7ee787; --hl-bullet: #f2cc60;
+    --hl-add: #aff5b4; --hl-add-bg: #033a16; --hl-del: #ffdcd7; --hl-del-bg: #67060c;
   }
 }
 * { box-sizing: border-box; }
@@ -110,6 +129,27 @@ details.thinking summary { cursor: pointer; user-select: none; margin-bottom: 4p
 .md .code-head { display: flex; justify-content: space-between; align-items: center; padding: 3px 4px 3px 12px; border-bottom: 1px solid var(--border); color: var(--fg-soft); font-size: 12px; }
 .md pre { margin: 0; padding: 12px; overflow-x: auto; }
 .md pre code { background: none; border: 0; padding: 0; overflow-wrap: normal; }
+/* highlight.js: die Klassen seiner Themes, die Farben oben je hell/dunkel */
+.md .hljs-keyword, .md .hljs-doctag, .md .hljs-meta .hljs-keyword, .md .hljs-template-tag, .md .hljs-template-variable,
+.md .hljs-type, .md .hljs-variable.language_ { color: var(--hl-keyword); }
+.md .hljs-title, .md .hljs-title.class_, .md .hljs-title.function_ { color: var(--hl-title); }
+.md .hljs-attr, .md .hljs-attribute, .md .hljs-literal, .md .hljs-meta, .md .hljs-number, .md .hljs-operator,
+.md .hljs-selector-attr, .md .hljs-selector-class, .md .hljs-selector-id, .md .hljs-variable { color: var(--hl-constant); }
+.md .hljs-string, .md .hljs-regexp, .md .hljs-meta .hljs-string { color: var(--hl-string); }
+.md .hljs-built_in, .md .hljs-symbol { color: var(--hl-builtin); }
+.md .hljs-comment, .md .hljs-code, .md .hljs-formula { color: var(--hl-comment); font-style: italic; }
+.md .hljs-name, .md .hljs-quote, .md .hljs-selector-tag, .md .hljs-selector-pseudo { color: var(--hl-tag); }
+.md .hljs-section { color: var(--hl-constant); font-weight: 600; }
+.md .hljs-bullet { color: var(--hl-bullet); }
+.md .hljs-emphasis { font-style: italic; }
+.md .hljs-strong { font-weight: 600; }
+.md .hljs-addition { color: var(--hl-add); background: var(--hl-add-bg); }
+.md .hljs-deletion { color: var(--hl-del); background: var(--hl-del-bg); }
+/* KaTeX: breite Formeln scrollen für sich, statt die Nachricht zu sprengen */
+.md .math { margin: 0 0 .8em; }
+.md .katex-display { margin: .5em 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
+.md .math .katex-display { margin: 0; }
+.md .katex { font-size: 1.1em; overflow-wrap: normal; }
 .md blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--fg-soft); }
 .md .table { overflow-x: auto; }
 .md table { border-collapse: collapse; font-size: 14px; }
@@ -399,14 +439,38 @@ const VIDEO_TOOL = {type: 'function', function: {
 
 // ---------- Markdown ----------
 
-const BLOCK_START = /^\s*(```|~~~|#{1,6}\s|>|([-*+]|\d+[.)])\s+)|^\s*([-*_])(\s*\3){2,}\s*$/
+const BLOCK_START = /^\s*(```|~~~|#{1,6}\s|>|([-*+]|\d+[.)])\s+|\$\$|\\\[)|^\s*([-*_])(\s*\3){2,}\s*$/
 const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)/
 const TABLE_SEP = /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*$/
+// $$…$$ und \[…\] abgesetzt, \(…\) und $…$ im Text. Ein $ wie bei Preisen ist keine
+// Formel: hinter dem öffnenden und vor dem schließenden steht kein Leerraum, danach keine Ziffer.
+const MATH = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(?<![\\$\w])\$(?![\s$])((?:\\.|[^$\\\n])+?)(?<!\s)\$(?![\d\w$])/g
 const link = (href, text) => `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`
 
+// Beim Streamen wird die Nachricht für jedes Token neu gesetzt: Formeln und
+// Codeblöcke kommen dann meist schon fertig aus diesem Speicher.
+const rendered = new Map()
+function cached(key, make) {
+  let html = rendered.get(key)
+  if (html === undefined) {
+    if (rendered.size > 400) rendered.clear()
+    rendered.set(key, html = make())
+  }
+  return html
+}
+
+function tex(src, display) {
+  if (!window.katex) return esc(display ? `$$${src}$$` : `$${src}$`)
+  return cached((display ? 'D' : 'I') + src, () => katex.renderToString(src, {
+    displayMode: display, throwOnError: false, errorColor: 'var(--danger)', strict: 'ignore'}))
+}
+
 function inline(s) {
-  const codes = []
-  s = s.replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`)
+  const kept = [], keep = html => `\u0000${kept.push(html) - 1}\u0000`
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => keep(`<code>${esc(c)}</code>`))
+    .replace(MATH, (_, dollars, brackets, parens, dollar) =>
+      keep(tex(dollars ?? brackets ?? parens ?? dollar, dollar === undefined && parens === undefined)))
+    .replace(/\\\$/g, () => keep('$'))
   s = esc(s)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.+?)__/g, '<strong>$1</strong>')
@@ -415,12 +479,34 @@ function inline(s) {
     .replace(/~~(.+?)~~/g, '<del>$1</del>')
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, h) => link(h, t))
     .replace(/(^|[\s(])(https?:\/\/[^\s<)]*[^\s<).,:;!?])/g, (_, p, h) => p + link(h, h))
-  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[i])}</code>`)
+    .replace(/\n/g, '<br>')
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => kept[i])
+}
+
+// $$ … $$ oder \[ … \] auf eigenen Zeilen, auch über mehrere: [TeX, nächste Zeile]
+function displayMath(lines, i) {
+  const m = lines[i].match(/^\s*(\$\$|\\\[)/)
+  if (!m) return null
+  const close = m[1] === '$$' ? '$$' : '\\]', parts = [lines[i].slice(m[0].length)]
+  for (let j = i; j < lines.length; j++) {
+    if (j > i) parts.push(lines[j])
+    const at = parts.at(-1).indexOf(close)
+    if (at < 0) continue
+    if (parts.at(-1).slice(at + 2).trim()) return null   // Text dahinter: Formel im Absatz
+    parts[parts.length - 1] = parts.at(-1).slice(0, at)
+    return [parts.join('\n'), j + 1]
+  }
+  return null   // noch offen (beim Streamen): erst einmal als Text
 }
 
 function codeBlock(code, lang) {
+  if (lang === 'math') return `<div class="math">${tex(code, true)}</div>`
+  const known = window.hljs && lang && hljs.getLanguage(lang)
+  const body = known
+    ? cached(`C${lang}\n${code}`, () => hljs.highlight(code, {language: lang, ignoreIllegals: true}).value)
+    : esc(code)
   return `<div class="code"><div class="code-head"><span>${esc(lang || 'code')}</span>` +
-    `<button type="button" class="ghost copy-code">Kopieren</button></div><pre><code>${esc(code)}</code></pre></div>`
+    `<button type="button" class="ghost copy-code">Kopieren</button></div><pre><code>${body}</code></pre></div>`
 }
 
 function list(lines, i) {
@@ -447,16 +533,16 @@ function list(lines, i) {
     } else {
       html += '</li>'
     }
-    html += `<li>${inline(it.text).replace(/\n/g, '<br>')}`
+    html += `<li>${inline(it.text)}`
   }
   while (stack.length) html += `</li></${stack.pop().tag}>`
   return [html, i]
 }
 
 function table(lines, i) {
-  // pipes inside code spans or escaped as \| don't split cells
+  // pipes inside code spans, formulas ($|x|$) or escaped as \| don't split cells
   const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '')
-    .replace(/`[^`]*`|\\\|/g, s => s.replace(/\\?\|/g, '\u0001')).split('|')
+    .replace(/`[^`]*`|\$(?![\s$])[^$]*?(?<!\s)\$(?!\d)|\\\|/g, s => s.replace(/\\?\|/g, '\u0001')).split('|')
     .map(c => c.trim().replace(/\u0001/g, '|'))
   const align = cells(lines[i + 1]).map(c => c.endsWith(':') ? (c.startsWith(':') ? 'center' : 'right') : '')
   const row = (l, tag) => '<tr>' + cells(l).map((c, j) =>
@@ -478,6 +564,9 @@ function markdown(src) {
       i++
     } else if (!line.trim()) {
       i++
+    } else if ((m = displayMath(lines, i))) {
+      html += `<div class="math">${tex(m[0], true)}</div>`
+      i = m[1]
     } else if ((m = line.match(/^\s*(#{1,6})\s+(.*?)(\s+#+)?\s*$/))) {
       html += `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`
       i++
@@ -497,7 +586,7 @@ function markdown(src) {
     } else {
       const para = [lines[i++]]
       while (i < lines.length && lines[i].trim() && !BLOCK_START.test(lines[i])) para.push(lines[i++])
-      html += `<p>${para.map(inline).join('<br>')}</p>`
+      html += `<p>${inline(para.join('\n'))}</p>`
     }
   }
   return html
