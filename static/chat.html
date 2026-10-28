@@ -1382,6 +1382,26 @@ async function paint(kind = 'image') {
   }
 }
 
+// A tool call written out as JSON, if it names one of `tools`: {function: {name, arguments}}.
+// The arguments may themselves be a JSON string, or the bare value of the first required one.
+function jsonCall(text, tools) {
+  // Models write TeX into it ($\sqrt{2}$): a backslash that starts no JSON escape stands for itself.
+  const parse = s => {
+    try { return JSON.parse(s) } catch {}
+    return JSON.parse(s.replace(/\\(?:(["\\/bfnrt]|u[0-9a-fA-F]{4})|)/g, (all, escape) => escape ? all : '\\\\'))
+  }
+  let j
+  try { j = parse(text) } catch { return null }
+  const name = j?.action ?? j?.name ?? j?.tool ?? j?.function?.name
+  const tool = tools.find(t => t.function.name === name)
+  if (!tool) return null
+  let args = j.action_input ?? j.arguments ?? j.parameters ?? j.args ?? j.tool_input ?? j.function?.arguments ?? {}
+  if (typeof args === 'string') {
+    try { args = parse(args) } catch { args = {[tool.function.parameters.required?.[0] ?? 'input']: args} }
+  }
+  return args && typeof args === 'object' ? {function: {name, arguments: args}} : null
+}
+
 async function generate(round = 0) {
   const c = chat, model = $('#model').value
   // Tool calls and their answers belong to the conversation even without text.
@@ -1457,6 +1477,22 @@ async function generate(round = 0) {
         return ''
       })
       .replace(/<\/?tool_call>/g, '').trimEnd()
+    // Gemma, deep into a chat without any call yet, writes one as JSON text:
+    // {"action": "generate_image", "action_input": "{…}"} (LangChain's form) or
+    // {"name": …, "arguments": …}, bare or in a ```json block -- and then
+    // believes it made it. Taken out and run too, for tools it was offered.
+    if (tools.length && !msg.toolCalls?.length && !textCalls.length) {
+      // [where, how long, the JSON]: ```json blocks, then from a line starting with { to the end
+      const blocks = [...msg.content.matchAll(/```(?:json)?[ \t]*\n([\s\S]*?)\n?```/g)].map(m => [m.index, m[0].length, m[1]])
+      for (const m of msg.content.matchAll(/^\{/gm)) blocks.push([m.index, Infinity, msg.content.slice(m.index)])
+      for (const [at, length, text] of blocks) {
+        const call = jsonCall(text, tools)
+        if (!call) continue
+        textCalls.push(call)
+        msg.content = (msg.content.slice(0, at) + msg.content.slice(at + length)).trim()
+        break
+      }
+    }
     if (textCalls.length) msg.toolCalls = [...(msg.toolCalls || []), ...textCalls]
     // The model asked for pictures: ComfyUI paints them into this message, the
     // answers go back to the model as tool messages, and it gets another turn.
