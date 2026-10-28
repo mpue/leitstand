@@ -5,7 +5,8 @@ in static/chat.html, die Chats als eine JSON-Datei pro Chat in
 ~/.local/share/ollama-chat/ -- dieselbe Ablage wie vorher, alte Chats sind also
 da. Der Server reicht /chat/api/* an Ollama weiter (streamend), speichert die
 Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder erzeugt
-ComfyUI (imagegen.py); sie liegen in der Ablage unter images/.
+ComfyUI (imagegen.py); sie liegen in der Ablage unter images/. Im Internet
+sucht und liest websearch.py (SearXNG).
 """
 
 import ipaddress
@@ -21,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import imagegen
+import websearch
 
 PAGE = Path(__file__).resolve().parent / "static" / "chat.html"
 DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ollama-chat"
@@ -138,6 +140,10 @@ def handle(handler, ollama, comfy):
         reply_json(handler, {"workflows": imagegen.workflows(), "server": comfy})
     elif path == "/chat/image" and method == "POST":
         image(handler, ollama, comfy)
+    elif path == "/chat/web/status" and method == "GET":
+        reply_json(handler, {"available": websearch.available()})
+    elif path in ("/chat/web/search", "/chat/web/fetch") and method == "POST":
+        web(handler, path.rsplit("/", 1)[1])
     elif (m := IMAGE_PATH.fullmatch(path)) and method == "GET":
         try:
             reply(handler, 200, (IMAGES / m[1]).read_bytes(), "image/png")
@@ -194,6 +200,19 @@ def image(handler, ollama, comfy):
             handler.wfile.flush()
     except ConnectionError:
         pass  # Seite zu: das Bild entsteht trotzdem fertig, es holt nur keiner ab
+
+
+def web(handler, what):
+    """Eine Suche oder eine gelesene Seite fuer die Recherche des Chat-Modells."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+        result = (websearch.search(req.get("query"), req.get("language") or "de") if what == "search"
+                  else websearch.fetch(req.get("url")))
+    except ValueError as e:
+        return reply_json(handler, {"error": str(e)}, 400)
+    except RuntimeError as e:
+        return reply_json(handler, {"error": str(e)}, 502)
+    reply_json(handler, result)
 
 
 def pdf_text(handler):

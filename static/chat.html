@@ -77,6 +77,13 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 .image-state::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--fg-soft); border-top-color: transparent; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .msg.tool { display: none; }
+/* What the model looked up: searches, pages read, as links */
+.research { margin: 2px 0 8px; font-size: 13px; color: var(--fg-soft); }
+.research summary { cursor: pointer; }
+.research ul { margin: 4px 0 0; padding-left: 18px; }
+.research li { margin: 2px 0; }
+.research a { color: inherit; }
+.research .q { color: var(--fg); }
 #image-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #settings .group { grid-column: 1 / -1; margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--fg-soft); text-transform: uppercase; letter-spacing: .05em; }
 #settings label.check { flex-direction: row; align-items: center; gap: 6px; }
@@ -216,6 +223,10 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
     <label class="image-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können">
       <input id="imageTool" type="checkbox"> Das Chat-Modell darf selbst Bilder malen lassen („mal mir …“)
     </label>
+    <div class="group web-only">Internet</div>
+    <label class="web-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Gesucht wird über das eigene SearXNG (searxng.sh).">
+      <input id="webResearch" type="checkbox"> Das Chat-Modell darf im Internet suchen und Seiten lesen
+    </label>
   </section>
 
   <div id="messages"></div>
@@ -266,7 +277,8 @@ const esc = s => s.replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&
 const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1) + ' GB'
 
 let settings = {model: '', temperature: '', num_ctx: '', think: '', system: '',
-  imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true}
+  imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true,
+  webResearch: true}
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ollama-chat') || '{}')) } catch {}
 const saveSettings = () => localStorage.setItem('ollama-chat', JSON.stringify(settings))
 
@@ -282,6 +294,50 @@ let pendingFiles = []   // {name, content} text attachments for the next message
 let imageWorkflows = [] // ComfyUI workflows the server offers (image/workflows)
 let imageMode = false   // the next message is a picture description, not a question
 let canUseTools = false
+let webAvailable = false  // the Leitstand's SearXNG answers (web/status)
+
+// What the chat model may call to look things up on the internet.
+const WEB_TOOLS = [
+  {type: 'function', function: {
+    name: 'web_search',
+    description: 'Searches the internet (SearXNG) and returns titles, addresses and short excerpts of the best hits. ' +
+      'Use it for anything current, factual or specific that you are not sure of: news, prices, versions, dates, ' +
+      'people, places, opening hours, how-tos. Then read the most promising pages with fetch_page -- excerpts alone are thin.',
+    parameters: {type: 'object', required: ['query'], properties: {
+      query: {type: 'string', description: 'Search words, as one would type them into a search engine'},
+      language: {type: 'string', description: 'Language of the results, e.g. "de" or "en" (default de)'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'fetch_page',
+    description: 'Reads a web page (or PDF) and returns its text. Use it on addresses from web_search, or ones the user gives.',
+    parameters: {type: 'object', required: ['url'], properties: {
+      url: {type: 'string', description: 'The full http(s) address'},
+    }},
+  }},
+]
+
+// What the model needs to know to research well: the date, how to go about
+// it (a model left to itself answers from the search excerpts and gets
+// versions and dates wrong), and to cite. And the language: the pages are
+// often English, and the answer follows them unless told.
+const researchNote = question =>
+  `Heute ist ${new Date().toLocaleDateString('de-DE', {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'})}. ` +
+  'Du kannst im Internet recherchieren: web_search sucht, fetch_page liest eine Seite. Geht es um Fakten, die sich ' +
+  'ändern oder die du nicht sicher weißt (Versionen, Preise, Nachrichten, Termine, Personen, Öffnungszeiten …), ' +
+  'dann so:\n1. web_search mit treffenden Suchwörtern.\n2. Lies mit fetch_page die zwei, drei besten Treffer, ' +
+  'am besten die Originalquelle -- die Ausschnitte der Suche allein reichen nicht und führen oft in die Irre.\n' +
+  '3. Achte auf Datumsangaben und vergleiche sie mit dem heutigen Datum: das Neueste zählt.\n' +
+  '4. Erst dann antworten, mit den gelesenen Quellen als Markdown-Links.\n' +
+  (germanish(question) ? 'Antworte auf Deutsch, auch wenn die Quellen englisch sind.' : 'Answer in the language the user writes in.')
+
+// Does the user write German? Umlauts, ß, or a few of its commonest words.
+function germanish(text = '') {
+  if (/[äöüß]/i.test(text)) return true
+  const t = ` ${text.toLowerCase().replace(/[^a-zäöüß]+/g, ' ')} `
+  return [' der ', ' die ', ' das ', ' und ', ' ich ', ' ist ', ' nicht ', ' wie ', ' was ', ' welche ', ' gibt ', ' mir ']
+    .filter(w => t.includes(w)).length >= 2
+}
 
 // What the chat model may call when it wants a picture.
 const IMAGE_TOOL = {type: 'function', function: {
@@ -636,7 +692,10 @@ function exportChat() {
   if (!chat.messages.length) return
   const md = `# ${chat.title}\n\n` + chat.messages.filter(m => m.role !== 'tool').map(m =>
     `**${m.role === 'user' ? 'Du' : m.model || 'Assistent'}:**\n\n${toOllama(m).content}` +
-    (m.generated || []).map(g => `\n\n![${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('')
+    (m.generated || []).map(g => `\n\n![${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('') +
+    ((m.research || []).filter(s => s.kind === 'fetch' && !s.error).length
+      ? '\n\nGelesen: ' + m.research.filter(s => s.kind === 'fetch' && !s.error).map(s => `[${(s.title || s.url).replace(/[\[\]]/g, '')}](${s.url})`).join(', ')
+      : '')
   ).join('\n\n---\n\n') + '\n'
   const a = el('a')
   a.href = URL.createObjectURL(new Blob([md], {type: 'text/markdown'}))
@@ -707,13 +766,45 @@ function renderMessage(m, i) {
   } else {
     const think = el('details', 'thinking')
     think.append(el('summary'), el('div', 'md'))
-    bubble.append(think, el('div', 'md content'), renderGenerated(m), el('div', 'error'))
+    bubble.append(think, renderResearch(m), el('div', 'md content'), renderGenerated(m), el('div', 'error'))
     meta.append(el('span', 'stats'), action('Kopieren', b => copy(splitThink(m.content)[1], b)))
     if (i === chat.messages.length - 1) meta.append(action('Neu generieren', regenerate))
   }
   wrap.append(bubble, meta)
   if (m.role === 'assistant') updateAssistant(wrap, m, false)
   return wrap
+}
+
+function renderResearch(m) {
+  const box = el('details', 'research')
+  const steps = m.research || []
+  if (!steps.length && !m.toolState) { box.hidden = true; return box }
+  const searches = steps.filter(s => s.kind === 'search').length, pages = steps.filter(s => s.kind === 'fetch').length
+  box.append(el('summary', '', m.toolState || ['Recherche', searches && `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}`,
+    pages && `${pages} ${pages === 1 ? 'Seite' : 'Seiten'} gelesen`].filter(Boolean).join(' · ')))
+  const ul = el('ul')
+  for (const s of steps) {
+    const li = el('li')
+    const linkTo = (href, text) => Object.assign(el('a', '', text), {href, target: '_blank', rel: 'noopener noreferrer'})
+    if (s.kind === 'search') {
+      li.append('🔎 ', el('span', 'q', s.query), s.error ? ` – ${s.error}` : ` – ${s.results?.length || 0} Treffer`)
+      if (s.results?.length) {
+        const sub = el('ul')
+        for (const r of s.results.slice(0, 5)) {
+          const item = el('li')
+          item.append(linkTo(r.url, r.title || r.url))
+          sub.append(item)
+        }
+        li.append(sub)
+      }
+    } else {
+      li.append('📄 ', s.error ? `${s.url} – ${s.error}` : linkTo(s.url, s.title || s.url))
+    }
+    ul.append(li)
+  }
+  box.append(ul)
+  if (m.toolState) box.open = true
+  return box
 }
 
 function renderGenerated(m) {
@@ -752,7 +843,7 @@ function updateAssistant(wrap, m, streaming) {
     think.querySelector('summary').textContent = streaming && !content ? 'Denkt nach…' : 'Gedankengang'
     think.querySelector('.md').innerHTML = markdown(thinking)
   }
-  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.generated?.length
+  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.toolState || m.generated?.length
     ? markdown(content) : '<span class="typing"></span>'
   wrap.querySelector('.error').textContent = m.error || ''
   wrap.querySelector('.stats').textContent = stats(m)
@@ -826,6 +917,33 @@ async function send() {
   autosize()
   renderChat()
   await generate()
+}
+
+// ---------- Research ----------
+
+// One search or one page for the model, noted in `msg` for the reader.
+async function research(name, args, msg, redraw, signal) {
+  const search = name === 'web_search'
+  msg.research ||= []
+  msg.toolState = search ? `Sucht im Netz: „${args.query || ''}“…` : `Liest ${args.url || ''}…`
+  redraw()
+  try {
+    const r = await json(search ? 'web/search' : 'web/fetch', {method: 'POST', signal,
+      body: JSON.stringify(search ? {query: args.query, language: args.language} : {url: args.url})})
+    if (search) {
+      msg.research.push({kind: 'search', query: r.query, results: r.results.map(({title, url}) => ({title, url}))})
+      return r
+    }
+    msg.research.push({kind: 'fetch', url: r.url, title: r.title})
+    return {url: r.url, title: r.title, text: r.text, ...(r.truncated && {note: `nur die ersten ${r.text.length} von ${r.length} Zeichen`})}
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    msg.research.push(search ? {kind: 'search', query: args.query, error: e.message} : {kind: 'fetch', url: args.url, error: e.message})
+    return {ok: false, error: e.message}
+  } finally {
+    delete msg.toolState
+    redraw()
+  }
 }
 
 // ---------- Pictures ----------
@@ -929,16 +1047,20 @@ async function generate(round = 0) {
   messagesBox.append(wrap)
   messagesBox.scrollTop = messagesBox.scrollHeight
 
+  const web = settings.webResearch && canUseTools && webAvailable
+  const question = [...c.messages].reverse().find(m => m.role === 'user')?.content
+  const system = [c.system, web && researchNote(question)].filter(Boolean).join('\n\n')
   const body = {
     model,
-    messages: [...(c.system ? [{role: 'system', content: c.system}] : []), ...history.map(toOllama)],
+    messages: [...(system ? [{role: 'system', content: system}] : []), ...history.map(toOllama)],
     stream: true,
     options: {},
   }
   if (settings.temperature !== '') body.options.temperature = Number(settings.temperature)
   if (settings.num_ctx !== '') body.options.num_ctx = Number(settings.num_ctx)
   if (settings.think && !$('#think').disabled) body.think = {on: true, off: false}[settings.think] ?? settings.think
-  if (settings.imageTool && canUseTools && imageWorkflows.length) body.tools = [IMAGE_TOOL]
+  const tools = [...(settings.imageTool && canUseTools && imageWorkflows.length ? [IMAGE_TOOL] : []), ...(web ? WEB_TOOLS : [])]
+  if (tools.length) body.tools = tools
 
   const ctrl = abort = new AbortController()
   setBusy(true)
@@ -961,15 +1083,30 @@ async function generate(round = 0) {
       }
       frame ||= requestAnimationFrame(update)
     }
-    // Qwen models sometimes write a call as text, whole or begun: taken out of
-    // the answer, and run when it is whole.
-    msg.content = msg.content.replace(/<tool_call>([\s\S]*?)(?:<\/tool_call>|$)/g, (_, inner) => {
-      try {
-        const j = JSON.parse(inner)
-        if (j.name) msg.toolCalls = [...(msg.toolCalls || []), {function: {name: j.name, arguments: j.arguments || {}}}]
-      } catch {}
-      return ''
-    }).trimEnd()
+    // Qwen models sometimes write a call as text instead of making it -- as
+    // JSON in <tool_call>, or in Qwen3-Coder's own form,
+    // <function=name><parameter=key>value</parameter></function>. Taken out
+    // of the answer, and run when whole.
+    const textCalls = []
+    msg.content = msg.content
+      .replace(/(?:<tool_call>\s*)?<function=([\w.-]+)>([\s\S]*?)(?:<\/function>|$)\s*(?:<\/tool_call>)?/g, (_, name, inner) => {
+        const args = {}
+        for (const p of inner.matchAll(/<parameter=([\w.-]+)>\n?([\s\S]*?)\n?(?:<\/parameter>|(?=<parameter=)|$)/g)) {
+          const v = p[2].trim()
+          args[p[1]] = /^-?\d+$/.test(v) && !['query', 'url', 'prompt'].includes(p[1]) ? Number(v) : v
+        }
+        textCalls.push({function: {name, arguments: args}})
+        return ''
+      })
+      .replace(/<tool_call>([\s\S]*?)(?:<\/tool_call>|$)/g, (_, inner) => {
+        try {
+          const j = JSON.parse(inner)
+          if (j.name) textCalls.push({function: {name: j.name, arguments: j.arguments || {}}})
+        } catch {}
+        return ''
+      })
+      .replace(/<\/?tool_call>/g, '').trimEnd()
+    if (textCalls.length) msg.toolCalls = [...(msg.toolCalls || []), ...textCalls]
     // The model asked for pictures: ComfyUI paints them into this message, the
     // answers go back to the model as tool messages, and it gets another turn.
     if (msg.toolCalls?.length) {
@@ -984,13 +1121,18 @@ async function generate(round = 0) {
         const f = call.function || {}
         let args = f.arguments || {}
         if (typeof args === 'string') try { args = JSON.parse(args) } catch { args = {} }
-        const result = f.name === 'generate_image' && args.prompt
-          ? await makeImage({prompt: args.prompt, ...(args.width && {width: args.width}), ...(args.height && {height: args.height})},
-              msg, redraw, ctrl.signal)
-          : {ok: false, error: `Es gibt kein Werkzeug ${f.name}`}
+        let result
+        if (f.name === 'generate_image' && args.prompt) {
+          result = await makeImage({prompt: args.prompt, ...(args.width && {width: args.width}), ...(args.height && {height: args.height})},
+            msg, redraw, ctrl.signal)
+        } else if (f.name === 'web_search' || f.name === 'fetch_page') {
+          result = await research(f.name, args, msg, redraw, ctrl.signal)
+        } else {
+          result = {ok: false, error: `Es gibt kein Werkzeug ${f.name} (oder es fehlen seine Angaben)`}
+        }
         c.messages.push({role: 'tool', toolName: f.name, content: JSON.stringify(result)})
       }
-      followUp = round < 3
+      followUp = round < 8   // research takes a few rounds: search, read, read, answer
     }
   } catch (e) {
     if (e.name !== 'AbortError') msg.error = e.message
@@ -1190,7 +1332,7 @@ for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize
   input.value = settings[id]
   input.onchange = () => { settings[id] = input.value; saveSettings() }
 }
-for (const id of ['imageShare', 'imageTool']) {
+for (const id of ['imageShare', 'imageTool', 'webResearch']) {
   const input = $('#' + id)
   input.checked = settings[id]
   input.onchange = () => { settings[id] = input.checked; saveSettings() }
@@ -1227,6 +1369,12 @@ $('#imageServer').onchange = async () => {
   await loadImageServers()
 }
 
+// Is the Leitstand's SearXNG there? Without it the model gets no web tools.
+async function loadWebStatus() {
+  webAvailable = !!(await json('web/status').catch(() => null))?.available
+  for (const e of document.querySelectorAll('.web-only')) e.hidden = !webAvailable
+}
+
 // The workflows ComfyUI can run; none (no workflows/ on the server): no pictures here.
 async function loadImageWorkflows() {
   imageWorkflows = (await json('image/workflows').catch(() => null))?.workflows || []
@@ -1245,7 +1393,7 @@ $('#system').oninput = () => {
 
 async function init() {
   chat = {id: newId(), title: '', model: '', system: settings.system, messages: [], created: Date.now(), updated: Date.now()}
-  await Promise.all([loadModels(), loadChats(), loadImageWorkflows()])
+  await Promise.all([loadModels(), loadChats(), loadImageWorkflows(), loadWebStatus()])
   const id = location.hash.slice(1)
   if (chats.some(c => c.id === id)) await openChat(id)
   else newChat()

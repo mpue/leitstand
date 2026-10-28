@@ -8,6 +8,7 @@ Weboberfläche für powermaxx: Ollama, ComfyUI und die GPU im Browser.
 - **Dienste**: Status, Starten/Stoppen/Neustart, Log
 - **Chat** (`/chat/`, Knopf oben rechts): ein Web-Chat mit den Ollama-Modellen -- Streaming, Chat-Verlauf, System-Prompt, Temperatur und Kontextlänge pro Chat, Thinking-Modelle, Anhänge (Text, Code, PDF über `pdftotext`, Bilder für Vision-Modelle), Modelle herunterladen, Export als Markdown. Die Chats liegen als eine JSON-Datei pro Chat in `~/.local/share/ollama-chat/`
 - **Bilder im Chat** über ComfyUI: der Schalter „🖼 Bild“ schickt die Nachricht als Bildbeschreibung direkt an ComfyUI; Modelle mit Tools (qwen3-coder …) dürfen im Gespräch selbst malen lassen („mal mir …“) und schreiben dafür einen englischen Prompt. Format, Schritte, Seed und Workflow stehen in den Einstellungen. Läuft ComfyUI nicht, startet der Chat es. Die Bilder liegen unter `~/.local/share/ollama-chat/images/` und gehen mit ihrem Chat, wenn er gelöscht wird
+- **Internet-Recherche im Chat**: Modelle mit Tools suchen über das eigene SearXNG (`web_search`) und lesen Seiten und PDFs (`fetch_page`); die Antwort nennt die gelesenen Quellen, und über der Antwort steht, was gesucht und gelesen wurde. Abschaltbar in den Einstellungen; ohne laufendes SearXNG gibt es die Werkzeuge nicht
 
 Aufruf: <http://192.168.178.102:8100>
 
@@ -16,6 +17,8 @@ Aufruf: <http://192.168.178.102:8100>
 - `server.py`: Python-Standardbibliothek, keine Abhängigkeiten. Liest `nvidia-smi`, fragt die APIs von Ollama (11434) und ComfyUI (8188) ab und ruft `systemctl` auf
 - `static/`: die Seite (HTML, CSS, JS ohne Build). Wird bei jedem Abruf von der Platte gelesen, Änderungen gelten nach einem Neuladen im Browser
 - `chat.py` + `static/chat.html`: der Chat unter `/chat/` (hervorgegangen aus `~/Documents/devel/ollama-chat`): leitet `/chat/api/*` an Ollama weiter, speichert die Chats, wandelt PDFs in Text
+- `websearch.py`: die Recherche des Chats. Sucht über SearXNG (`LEITSTAND_SEARXNG`, Standard `http://127.0.0.1:8888`), liest Seiten selbst und macht daraus Text (Hauptteil der Seite, ohne Menüs und Skripte; PDFs über `pdftotext`)
+- `searxng.sh`: richtet SearXNG als Docker-Container ein (`sh searxng.sh`, ohne sudo, wenn man in der Gruppe `docker` ist): nur auf `127.0.0.1:8888`, mit JSON-Ausgabe, startet mit Docker. Die Einstellungen liegen in `~/.config/leitstand/searxng/settings.yml` (der Container gibt den Ordner seinem eigenen Benutzer; ändern daher mit sudo)
 - `imagegen.py` + `workflows/`: Bilder für den Chat. Ein Workflow ist ComfyUIs API-Format mit einem Kopf darum (siehe `workflows/z-image-turbo.json`): `set` sagt, welcher Knoten den Prompt, die Größe, den Seed und die Schritte bekommt, `defaults` die Vorgaben. Ein weiterer Workflow: in ComfyUI über *Export (API)* speichern, so einpacken und als `workflows/<name>.json` ablegen -- er erscheint ohne Neustart in den Einstellungen
 
 ### ComfyUI-Server
@@ -43,5 +46,7 @@ Nach Änderungen an `server.py`: `sudo systemctl restart leitstand`.
 ## Sicherheit
 
 Kein Login: Jeder im Heimnetz kann die Dienste starten und stoppen, genau wie er die Ollama-API ohnehin nutzen kann. POST-Anfragen brauchen den Header `X-Leitstand: 1`. Dadurch kann eine fremde Webseite im Browser keine Aktionen auslösen.
+
+Die Recherche liest nur das öffentliche Internet: Adressen, die ins eigene Netz zeigen (localhost, 192.168.\*, 10.\* …), auch über Weiterleitungen, holt sie nicht. Was das Modell liest, kommt von fremden Seiten, und eine Seite könnte es sonst anweisen, den Router oder den Leitstand selbst abzurufen.
 
 Für den Chat gilt dasselbe (alles außer GET braucht den Header), und zusätzlich: Er antwortet nur, wenn er per IP, `localhost` oder den Rechnernamen angesprochen wird, und nur Anfragen von seiner eigenen Seite -- der Proxy verbirgt den Ursprung des Browsers vor Ollama, also prüft der Leitstand ihn. Jeder im Heimnetz kann die gespeicherten Chats lesen.
