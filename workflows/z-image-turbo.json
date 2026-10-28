@@ -1,6 +1,7 @@
 {
   "name": "Z-Image Turbo",
   "about": "Der Text-zu-Bild-Graph aus ComfyUIs Vorlage \"Text to Image (Z-Image-Turbo)\": 8 Schritte, CFG 1, res_multistep/simple, Shift 3.",
+  "progress": "8",
   "set": {
     "prompt": ["5", "text"],
     "width": ["7", "width"],

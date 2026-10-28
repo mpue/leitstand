@@ -4,8 +4,8 @@ Hervorgegangen aus ollama-chat (~/Documents/devel/ollama-chat): die Seite liegt
 in static/chat.html, die Chats als eine JSON-Datei pro Chat in
 ~/.local/share/ollama-chat/ -- dieselbe Ablage wie vorher, alte Chats sind also
 da. Der Server reicht /chat/api/* an Ollama weiter (streamend), speichert die
-Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder erzeugt
-ComfyUI (imagegen.py); sie liegen in der Ablage unter images/. Im Internet
+Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder und Videos
+erzeugt ComfyUI (imagegen.py); sie liegen in der Ablage unter images/. Im Internet
 sucht und liest websearch.py (SearXNG).
 """
 
@@ -28,7 +28,7 @@ PAGE = Path(__file__).resolve().parent / "static" / "chat.html"
 DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ollama-chat"
 CHAT_ID = re.compile(r"[0-9a-f]{32}")
 CHAT_PATH = re.compile(r"/chat/chats/([0-9a-f]{32})")
-IMAGE_PATH = re.compile(r"/chat/images/([0-9a-f]{32}\.png)")
+IMAGE_PATH = re.compile(r"/chat/images/(" + imagegen.MEDIA_NAME.pattern + ")")
 IMAGES = DATA / "images"
 
 
@@ -72,9 +72,9 @@ class ChatStore:
     def delete(self, chat_id):
         with self.lock:
             path = self.root / f"{chat_id}.json"
-            # Die Bilder, die ComfyUI fuer diesen Chat gemalt hat, gehen mit.
+            # Die Bilder und Videos, die ComfyUI fuer diesen Chat gemacht hat, gehen mit.
             try:
-                for name in set(re.findall(r'"images/([0-9a-f]{32}\.png)"', path.read_text("utf-8"))):
+                for name in set(re.findall(r'"images/([0-9a-f]{32}\.(?:png|mp4))"', path.read_text("utf-8"))):
                     (IMAGES / name).unlink(missing_ok=True)
             except OSError:
                 pass
@@ -145,10 +145,7 @@ def handle(handler, ollama, comfy):
     elif path in ("/chat/web/search", "/chat/web/fetch") and method == "POST":
         web(handler, path.rsplit("/", 1)[1])
     elif (m := IMAGE_PATH.fullmatch(path)) and method == "GET":
-        try:
-            reply(handler, 200, (IMAGES / m[1]).read_bytes(), "image/png")
-        except OSError:
-            reply_json(handler, {"error": "Bild nicht gefunden"}, 404)
+        media(handler, IMAGES / m[1])
     elif path == "/chat/" and method == "GET":
         try:
             reply(handler, 200, PAGE.read_bytes(), "text/html; charset=utf-8")
@@ -185,7 +182,7 @@ def chat(handler, chat_id):
 
 
 def image(handler, ollama, comfy):
-    """Ein Bild von ComfyUI, als NDJSON-Strom der Zustaende (siehe imagegen.run)."""
+    """Ein Bild oder Video von ComfyUI, als NDJSON-Strom der Zustaende (siehe imagegen.run)."""
     try:
         req = json.loads(body(handler) or b"{}")
     except ValueError:
@@ -194,12 +191,52 @@ def image(handler, ollama, comfy):
     handler.send_header("Content-Type", "application/x-ndjson")
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
+    states = imagegen.run(req, ollama, comfy, IMAGES)
     try:
-        for state in imagegen.run(req, ollama, comfy, IMAGES):
+        for state in states:
             handler.wfile.write((json.dumps(state, ensure_ascii=False) + "\n").encode())
             handler.wfile.flush()
     except ConnectionError:
-        pass  # Seite zu: das Bild entsteht trotzdem fertig, es holt nur keiner ab
+        pass  # Stopp oder Seite zu
+    finally:
+        states.close()   # bricht den Auftrag in ComfyUI ab, falls er noch laeuft
+
+
+def media(handler, path):
+    """Ein Bild oder Video aus der Ablage. Videos mit Range: ohne kann der
+    Browser darin nicht springen."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return reply_json(handler, {"error": "Datei nicht gefunden"}, 404)
+    ctype = "video/mp4" if path.suffix == ".mp4" else "image/png"
+    m = re.fullmatch(r"bytes=(\d*)-(\d*)", handler.headers.get("Range", "").strip())
+    if not m or not (m[1] or m[2]):
+        handler.send_response(200)
+        handler.send_header("Content-Type", ctype)
+        handler.send_header("Accept-Ranges", "bytes")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "private, max-age=86400")   # der Name ist eindeutig
+        handler.end_headers()
+        handler.wfile.write(data)
+        return
+    size = len(data)
+    start, end = (int(m[1]), int(m[2]) if m[2] else size - 1) if m[1] else (max(0, size - int(m[2])), size - 1)
+    if start >= size or end < start:
+        handler.send_response(416)
+        handler.send_header("Content-Range", f"bytes */{size}")
+        handler.send_header("Content-Length", "0")
+        handler.end_headers()
+        return
+    end = min(end, size - 1)
+    handler.send_response(206)
+    handler.send_header("Content-Type", ctype)
+    handler.send_header("Accept-Ranges", "bytes")
+    handler.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+    handler.send_header("Content-Length", str(end - start + 1))
+    handler.send_header("Cache-Control", "private, max-age=86400")
+    handler.end_headers()
+    handler.wfile.write(data[start:end + 1])
 
 
 def web(handler, what):

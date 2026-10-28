@@ -69,13 +69,14 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 /* Pictures ComfyUI painted: shown big, a click opens the full size */
 .generated { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 8px; }
 .generated figure { margin: 0; }
-.generated img { display: block; max-width: 100%; max-height: 70vh; border-radius: 10px; background: var(--bg-soft); }
+.generated img, .generated video { display: block; max-width: 100%; max-height: 70vh; border-radius: 10px; background: var(--bg-soft); }
 .generated figcaption { margin-top: 4px; color: var(--fg-soft); font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
 .generated figcaption .p { flex-basis: 100%; color: var(--fg); font-style: italic; }
 .generated figcaption a { color: inherit; }
 .image-state { color: var(--fg-soft); font-size: 13px; display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .image-state::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--fg-soft); border-top-color: transparent; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.image-progress { display: block; width: min(360px, 100%); height: 6px; margin: 2px 0 6px 20px; accent-color: var(--accent); }
 .msg.tool { display: none; }
 /* What the model looked up: searches, pages read, as links */
 .research { margin: 2px 0 8px; font-size: 13px; color: var(--fg-soft); }
@@ -84,7 +85,7 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 .research li { margin: 2px 0; }
 .research a { color: inherit; }
 .research .q { color: var(--fg); }
-#image-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+#image-mode[aria-pressed="true"], #video-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #settings .group { grid-column: 1 / -1; margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--fg-soft); text-transform: uppercase; letter-spacing: .05em; }
 #settings label.check { flex-direction: row; align-items: center; gap: 6px; }
 .error { color: var(--danger); font-size: 14px; }
@@ -218,10 +219,31 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
       <input id="imageSeed" type="number" min="0" placeholder="Zufall">
     </label>
     <label class="image-only check wide" title="Ollamas Modelle und ComfyUIs Bildmodell passen nicht zusammen in den Grafikspeicher">
-      <input id="imageShare" type="checkbox"> Grafikspeicher teilen: vor einem Bild die Ollama-Modelle entladen, vor der nächsten Antwort ComfyUIs
+      <input id="imageShare" type="checkbox"> Grafikspeicher teilen: vor einem Bild die Ollama-Modelle entladen, vor der nächsten Antwort ComfyUIs (Videos räumen die Karte immer)
     </label>
     <label class="image-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können">
       <input id="imageTool" type="checkbox"> Das Chat-Modell darf selbst Bilder malen lassen („mal mir …“)
+    </label>
+    <div class="group video-only">Videos (ComfyUI)</div>
+    <label class="video-only" title="Videos laufen auf demselben Server wie die Bilder">Workflow
+      <select id="videoWorkflow"></select>
+    </label>
+    <label class="video-only">Format
+      <select id="videoSize">
+        <option value="1344x768">Breit 16:9 · 1344 × 768</option>
+        <option value="768x1344">Handy 9:16 · 768 × 1344</option>
+        <option value="864x480">Klein 16:9 · 864 × 480 (schneller)</option>
+      </select>
+    </label>
+    <label class="video-only" title="Länger dauert deutlich länger">Länge
+      <select id="videoSeconds">
+        <option value="5">5 Sekunden</option>
+        <option value="10">10 Sekunden</option>
+        <option value="15">15 Sekunden</option>
+      </select>
+    </label>
+    <label class="video-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Ein Video braucht die ganze Grafikkarte: der Chat entlädt dafür die Ollama-Modelle.">
+      <input id="videoTool" type="checkbox"> Das Chat-Modell darf selbst Videos drehen lassen („mach mir ein Video …“)
     </label>
     <div class="group web-only">Internet</div>
     <label class="web-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Gesucht wird über das eigene SearXNG (searxng.sh).">
@@ -239,6 +261,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
         <button type="button" id="attach" class="ghost">＋ Datei</button>
         <button type="button" id="image-mode" class="ghost image-only" aria-pressed="false"
                 title="Die Nachricht als Bildbeschreibung direkt an ComfyUI schicken">🖼 Bild</button>
+        <button type="button" id="video-mode" class="ghost video-only" aria-pressed="false"
+                title="Die Nachricht als Videobeschreibung direkt an ComfyUI schicken (mit Ton)">🎬 Video</button>
         <input type="file" id="file" multiple hidden>
         <span class="spacer"></span>
         <span class="hint">Enter senden · Shift+Enter neue Zeile · Esc stoppt</span>
@@ -278,6 +302,7 @@ const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1) + ' GB'
 
 let settings = {model: '', temperature: '', num_ctx: '', think: '', system: '',
   imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true,
+  videoWorkflow: '', videoSize: '1344x768', videoSeconds: '5', videoTool: true,
   webResearch: true}
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ollama-chat') || '{}')) } catch {}
 const saveSettings = () => localStorage.setItem('ollama-chat', JSON.stringify(settings))
@@ -291,8 +316,9 @@ let pullAbort = null
 let canSeeImages = true
 let pendingImages = []  // data URLs for the next message
 let pendingFiles = []   // {name, content} text attachments for the next message
-let imageWorkflows = [] // ComfyUI workflows the server offers (image/workflows)
-let imageMode = false   // the next message is a picture description, not a question
+let imageWorkflows = [] // ComfyUI workflows the server offers (image/workflows) that paint
+let videoWorkflows = [] // ... and those that film
+let mode = ''           // 'image' / 'video': the next message is a description for ComfyUI, not a question
 let canUseTools = false
 let webAvailable = false  // the Leitstand's SearXNG answers (web/status)
 
@@ -351,6 +377,23 @@ const IMAGE_TOOL = {type: 'function', function: {
     width: {type: 'integer', description: 'Width in pixels. About one megapixel works best: square 1024x1024, ' +
       'landscape 1344x768 or 1152x896, portrait 768x1344 or 896x1152'},
     height: {type: 'integer', description: 'Height in pixels (see width)'},
+  }},
+}}
+
+// What the chat model may call when it wants a clip. A video takes minutes
+// and the whole graphics card, so only when asked for one.
+const VIDEO_TOOL = {type: 'function', function: {
+  name: 'generate_video',
+  description: 'Films a short video clip WITH SOUND (MiniMax H3 in ComfyUI on this computer) and shows it to the user. ' +
+    'It takes one to several minutes, so use it only when the user asks for a video, clip, film or animation. ' +
+    'Write the prompt in English, as a short screenplay: the look (e.g. realistic live-action, anime, watercolor), ' +
+    'the scene and who is in it, the camera (static, dolly, pan, close-up …), the action, for longer clips a timeline ' +
+    'like "[0s-2s] … [2s-5s] …", then a paragraph "Audio:" with sounds, music and any spoken lines in quotes ' +
+    '(in the language they should be spoken in). End with "No text, subtitles, logos or watermarks."',
+  parameters: {type: 'object', required: ['prompt'], properties: {
+    prompt: {type: 'string', description: 'The English screenplay of the clip, with its Audio: paragraph'},
+    seconds: {type: 'integer', description: 'Length: 5, 10 or 15 seconds (default 5; longer takes much longer)'},
+    portrait: {type: 'boolean', description: 'true for an upright phone video (9:16), otherwise landscape 16:9'},
   }},
 }}
 
@@ -533,7 +576,7 @@ async function selectModel(name) {
     settings.model = model
     saveSettings()
   }
-  setImageMode(imageMode)   // the placeholder says what the next message will be
+  setMode(mode)   // the placeholder says what the next message will be
   let info = null
   if (model) {
     info = modelInfo[model] ??= await json('api/show', {method: 'POST', body: JSON.stringify({model})}).catch(() => ({}))
@@ -692,7 +735,7 @@ function exportChat() {
   if (!chat.messages.length) return
   const md = `# ${chat.title}\n\n` + chat.messages.filter(m => m.role !== 'tool').map(m =>
     `**${m.role === 'user' ? 'Du' : m.model || 'Assistent'}:**\n\n${toOllama(m).content}` +
-    (m.generated || []).map(g => `\n\n![${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('') +
+    (m.generated || []).map(g => `\n\n${g.kind === 'video' ? '🎬 [Video: ' : '!['}${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('') +
     ((m.research || []).filter(s => s.kind === 'fetch' && !s.error).length
       ? '\n\nGelesen: ' + m.research.filter(s => s.kind === 'fetch' && !s.error).map(s => `[${(s.title || s.url).replace(/[\[\]]/g, '')}](${s.url})`).join(', ')
       : '')
@@ -810,29 +853,51 @@ function renderResearch(m) {
 function renderGenerated(m) {
   const box = el('div', 'generated')
   for (const g of m.generated || []) {
-    const fig = el('figure'), a = el('a'), img = el('img')
-    a.href = g.url
-    a.target = '_blank'
-    img.src = g.url
-    img.alt = g.prompt
-    img.loading = 'lazy'
-    a.append(img)
+    const video = g.kind === 'video'
+    const fig = el('figure')
+    if (video) {
+      const v = el('video')
+      v.src = g.url
+      v.controls = true
+      v.preload = 'metadata'
+      v.playsInline = true
+      fig.append(v)
+    } else {
+      const a = el('a'), img = el('img')
+      a.href = g.url
+      a.target = '_blank'
+      img.src = g.url
+      img.alt = g.prompt
+      img.loading = 'lazy'
+      a.append(img)
+      fig.append(a)
+    }
     const cap = el('figcaption')
     const dl = el('a', '', 'Herunterladen')
     dl.href = g.url
-    dl.download = `${(g.prompt || 'bild').slice(0, 40).replace(/[^\w äöüÄÖÜß-]+/g, '').trim() || 'bild'}-${g.seed}.png`
+    const stem = (g.prompt || '').slice(0, 40).replace(/[^\w äöüÄÖÜß-]+/g, '').trim() || (video ? 'video' : 'bild')
+    dl.download = `${stem}-${g.seed}.${video ? 'mp4' : 'png'}`
     cap.append(el('span', 'p', g.prompt),
-      el('span', '', [g.workflow_name, g.server, g.width && `${g.width} × ${g.height}`, g.steps && `${g.steps} Schritte`,
-        `Seed ${g.seed}`, g.seconds && `${g.seconds} s`].filter(Boolean).join(' · ')),
-      dl, action('Prompt kopieren', b => copy(g.prompt, b)),
-      action('Seed übernehmen', () => { settings.imageSeed = $('#imageSeed').value = String(g.seed); saveSettings(); toast(`Seed ${g.seed} gilt für die nächsten Bilder`) }))
-    fig.append(a, cap)
+      el('span', '', [g.workflow_name, g.server, g.width && `${g.width} × ${g.height}`, g.duration && `${g.duration} s Video`,
+        g.steps && `${g.steps} Schritte`, `Seed ${g.seed}`, g.seconds && `in ${clock(g.seconds)}`].filter(Boolean).join(' · ')),
+      dl, action('Prompt kopieren', b => copy(g.prompt, b)))
+    if (!video) cap.append(action('Seed übernehmen', () => { settings.imageSeed = $('#imageSeed').value = String(g.seed); saveSettings(); toast(`Seed ${g.seed} gilt für die nächsten Bilder`) }))
+    fig.append(cap)
     box.append(fig)
   }
   if (m.imageState) box.append(el('div', 'image-state', m.imageState))
+  if (m.imageProgress != null) {
+    const bar = el('progress', 'image-progress')
+    bar.max = 1
+    bar.value = m.imageProgress
+    box.append(bar)
+  }
   box.hidden = !box.childElementCount
   return box
 }
+
+// 83 -> "1:23", 7 -> "7 s"
+const clock = s => s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')} min`
 
 function updateAssistant(wrap, m, streaming) {
   const [tagged, content] = splitThink(m.content)
@@ -886,9 +951,9 @@ function toOllama(m) {
     return `Datei: ${f.name}\n${fence}\n${f.content}\n${fence}`
   })
   let content = m.role === 'assistant' ? splitThink(m.content)[1] : m.content
-  // A picture made by the image switch: the model hears that it exists.
+  // A picture or clip made by the switch: the model hears that it exists.
   if (m.generated?.length && !m.toolCalls?.length && !content.trim())
-    content = m.generated.map(g => `[Bild mit ComfyUI erzeugt: „${g.prompt}“]`).join('\n')
+    content = m.generated.map(g => `[${g.kind === 'video' ? 'Video' : 'Bild'} mit ComfyUI erzeugt: „${g.prompt}“]`).join('\n')
   const out = {role: m.role, content: [...files, content].filter(Boolean).join('\n\n')}
   if (m.images?.length) out.images = m.images.map(u => u.slice(u.indexOf(',') + 1))
   if (m.toolCalls?.length) out.tool_calls = m.toolCalls
@@ -899,13 +964,13 @@ function toOllama(m) {
 async function send() {
   const text = $('#input').value.trim()
   if (abort || (!text && !pendingImages.length && !pendingFiles.length)) return
-  if (imageMode && text) {
-    chat.messages.push({role: 'user', content: text, imageMode: true})
-    chat.title ||= '🖼 ' + text.split('\n')[0].slice(0, 58)
+  if (mode && text) {
+    chat.messages.push({role: 'user', content: text, ...(mode === 'video' ? {videoMode: true} : {imageMode: true})})
+    chat.title ||= (mode === 'video' ? '🎬 ' : '🖼 ') + text.split('\n')[0].slice(0, 58)
     $('#input').value = ''
     autosize()
     renderChat()
-    return paint()
+    return paint(mode)
   }
   if (!$('#model').value) return openModels()
   chat.messages.push({role: 'user', content: text, ...(pendingImages.length && {images: pendingImages}), ...(pendingFiles.length && {files: pendingFiles})})
@@ -946,7 +1011,7 @@ async function research(name, args, msg, redraw, signal) {
   }
 }
 
-// ---------- Pictures ----------
+// ---------- Pictures and clips ----------
 
 const imageSettings = () => {
   const [width, height] = settings.imageSize.split('x').map(Number)
@@ -956,56 +1021,84 @@ const imageSettings = () => {
     free_vram: settings.imageShare}
 }
 
+// A clip always gets the whole card (the workflow says so); the switch only
+// decides whether the next chat answer takes it back.
+const videoSettings = () => {
+  const [width, height] = settings.videoSize.split('x').map(Number)
+  return {workflow: settings.videoWorkflow || videoWorkflows[0]?.id, width, height,
+    seconds: Number(settings.videoSeconds) || 5, free_vram: settings.imageShare}
+}
+
 const STATE_TEXT = {
   starting: () => 'ComfyUI wird gestartet…',
   vram: s => `Grafikspeicher wird frei gemacht (${s.models.join(', ')})…`,
   queued: s => s.position ? `Wartet in ComfyUIs Schlange (${s.position} davor)…` : 'Wartet in ComfyUIs Schlange…',
-  running: () => 'ComfyUI malt…',
+  // Before the first step ComfyUI loads its models and reads the prompt; after
+  // the last it decodes (for a clip: picture and sound).
+  running: (s, kind) => !s.steps ? (kind === 'video' ? 'ComfyUI lädt das Videomodell und liest die Beschreibung…' : 'ComfyUI malt…')
+    : s.step >= s.steps ? (kind === 'video' ? 'Setzt Bild und Ton zusammen…' : 'Fertig gemalt, wird gespeichert…')
+    : `${kind === 'video' ? 'ComfyUI dreht' : 'ComfyUI malt'} · Schritt ${s.step} von ${s.steps}`,
 }
 
-// One picture into `msg`, drawn as it goes by `redraw`. Resolves to what the
-// tool answers the model: what was made, or why not.
-async function makeImage(req, msg, redraw, signal) {
+// One picture or clip into `msg`, drawn as it goes by `redraw`: what ComfyUI
+// is doing, how long it has been at it, the steps as a bar and, once two steps
+// are done, how long the rest will take. Resolves to what the tool answers the
+// model: what was made, or why not.
+async function makeMedia(kind, req, msg, redraw, signal) {
   const t0 = performance.now()
-  let state = 'Auftrag an ComfyUI…'
-  const tick = setInterval(() => {
-    msg.imageState = `${state} ${Math.round((performance.now() - t0) / 1000)} s`
+  let state = 'Auftrag an ComfyUI…', eta = ''
+  const marks = []   // [time, step] of each new step, for the estimate
+  const show = () => {
+    const took = (performance.now() - t0) / 1000
+    msg.imageState = [state, clock(took), eta].filter(Boolean).join(' · ')
     redraw()
-  }, 1000)
-  msg.imageState = state
-  redraw()
+  }
+  const tick = setInterval(show, 1000)
+  show()
   try {
-    const res = await api('image', {method: 'POST', body: JSON.stringify({...imageSettings(), ...req}), signal})
+    const res = await api('image', {method: 'POST', signal,
+      body: JSON.stringify({...(kind === 'video' ? videoSettings() : imageSettings()), ...req})})
     for await (const s of ndjson(res)) {
       if (s.state === 'done') {
-        msg.generated = [...(msg.generated || []), ...s.images.map(url => ({url, prompt: s.prompt, seed: s.seed,
-          width: s.width, height: s.height, steps: s.steps, seconds: s.seconds, workflow_name: s.workflow_name,
-          server: s.server}))]
-        return {ok: true, shown_to_user: true, seed: s.seed, width: s.width, height: s.height}
+        msg.generated = [...(msg.generated || []), ...s.images.map(url => ({url, kind: s.kind, prompt: s.prompt,
+          seed: s.seed, width: s.width, height: s.height, steps: s.steps, duration: s.duration, seconds: s.seconds,
+          workflow_name: s.workflow_name, server: s.server}))]
+        return {ok: true, shown_to_user: true, seed: s.seed, width: s.width, height: s.height,
+          ...(s.duration && {duration_seconds: s.duration})}
       }
       if (s.state === 'error') throw new Error(s.error)
-      state = STATE_TEXT[s.state]?.(s) || state
-      msg.imageState = state
-      redraw()
+      state = STATE_TEXT[s.state]?.(s, kind) || state
+      if (s.steps) {
+        msg.imageProgress = s.step / s.steps
+        if (marks.at(-1)?.[1] !== s.step) marks.push([performance.now(), s.step])
+        const [ta, sa] = marks[0], [tb, sb] = marks.at(-1)
+        eta = sb > sa && s.step < s.steps ? `noch etwa ${clock((tb - ta) / (sb - sa) * (s.steps - s.step) / 1000)}` : ''
+      } else if (s.state !== 'running') {
+        delete msg.imageProgress
+        eta = ''
+      }
+      show()
     }
-    throw new Error('ComfyUI hat kein Bild geliefert')
+    throw new Error(`ComfyUI hat ${kind === 'video' ? 'kein Video' : 'kein Bild'} geliefert`)
   } catch (e) {
     if (e.name === 'AbortError') throw e
-    msg.error = (msg.error ? msg.error + '\n' : '') + 'Bild: ' + e.message
+    msg.error = (msg.error ? msg.error + '\n' : '') + (kind === 'video' ? 'Video: ' : 'Bild: ') + e.message
     return {ok: false, error: e.message}
   } finally {
     clearInterval(tick)
     delete msg.imageState
+    delete msg.imageProgress
     redraw()
   }
 }
 
-// The image switch: the last message is the description, ComfyUI the painter.
-async function paint() {
+// The image or video switch: the last message is the description, ComfyUI the painter.
+async function paint(kind = 'image') {
   const c = chat, prompt = c.messages.at(-1).content
-  const wf = imageWorkflows.find(w => w.id === imageSettings().workflow)
+  const wf = (kind === 'video' ? videoWorkflows : imageWorkflows)
+    .find(w => w.id === (kind === 'video' ? videoSettings() : imageSettings()).workflow)
   const server = $('#imageServer').selectedOptions[0]?.textContent.split(' · ')[0]
-  const msg = {role: 'assistant', content: '', model: `ComfyUI · ${wf?.name || 'Bild'}${server ? ` · ${server}` : ''}`}
+  const msg = {role: 'assistant', content: '', model: `ComfyUI · ${wf?.name || (kind === 'video' ? 'Video' : 'Bild')}${server ? ` · ${server}` : ''}`}
   c.messages.push(msg)
   messagesBox.querySelector('.empty')?.remove()
   let wrap = renderMessage(msg, c.messages.length - 1)
@@ -1020,7 +1113,7 @@ async function paint() {
   const ctrl = abort = new AbortController()
   setBusy(true)
   try {
-    await makeImage({prompt}, msg, redraw, ctrl.signal)
+    await makeMedia(kind, {prompt}, msg, redraw, ctrl.signal)
   } catch (e) {
     if (e.name !== 'AbortError') msg.error = e.message
   } finally {
@@ -1059,7 +1152,8 @@ async function generate(round = 0) {
   if (settings.temperature !== '') body.options.temperature = Number(settings.temperature)
   if (settings.num_ctx !== '') body.options.num_ctx = Number(settings.num_ctx)
   if (settings.think && !$('#think').disabled) body.think = {on: true, off: false}[settings.think] ?? settings.think
-  const tools = [...(settings.imageTool && canUseTools && imageWorkflows.length ? [IMAGE_TOOL] : []), ...(web ? WEB_TOOLS : [])]
+  const tools = [...(settings.imageTool && canUseTools && imageWorkflows.length ? [IMAGE_TOOL] : []),
+    ...(settings.videoTool && canUseTools && videoWorkflows.length ? [VIDEO_TOOL] : []), ...(web ? WEB_TOOLS : [])]
   if (tools.length) body.tools = tools
 
   const ctrl = abort = new AbortController()
@@ -1123,8 +1217,15 @@ async function generate(round = 0) {
         if (typeof args === 'string') try { args = JSON.parse(args) } catch { args = {} }
         let result
         if (f.name === 'generate_image' && args.prompt) {
-          result = await makeImage({prompt: args.prompt, ...(args.width && {width: args.width}), ...(args.height && {height: args.height})},
+          result = await makeMedia('image', {prompt: args.prompt, ...(args.width && {width: args.width}), ...(args.height && {height: args.height})},
             msg, redraw, ctrl.signal)
+        } else if (f.name === 'generate_video' && args.prompt) {
+          // The format of the settings, turned upright when the model asks for a phone video.
+          const [w, h] = settings.videoSize.split('x').map(Number)
+          const upright = args.portrait === true || args.portrait === 'true'
+          result = await makeMedia('video', {prompt: args.prompt,
+            ...(Number(args.seconds) && {seconds: Number(args.seconds)}),
+            ...(upright && {width: Math.min(w, h), height: Math.max(w, h)})}, msg, redraw, ctrl.signal)
         } else if (f.name === 'web_search' || f.name === 'fetch_page') {
           result = await research(f.name, args, msg, redraw, ctrl.signal)
         } else {
@@ -1162,7 +1263,9 @@ function regenerate() {
   // Back to the question: a tool round leaves call, answers and reply behind it.
   while (chat.messages.length && chat.messages.at(-1).role !== 'user') chat.messages.pop()
   renderChat()
-  if (chat.messages.at(-1)?.imageMode) paint()
+  const last = chat.messages.at(-1)
+  if (last?.videoMode) paint('video')
+  else if (last?.imageMode) paint('image')
   else generate()
 }
 
@@ -1170,7 +1273,7 @@ function editMessage(i) {
   if (abort) return
   const m = chat.messages[i]
   chat.messages.splice(i)
-  setImageMode(!!m.imageMode)
+  setMode(m.videoMode ? 'video' : m.imageMode ? 'image' : '')
   $('#input').value = m.content
   pendingImages = m.images || []
   pendingFiles = m.files || []
@@ -1305,7 +1408,8 @@ document.addEventListener('keydown', e => {
 })
 
 $('#attach').onclick = () => $('#file').click()
-$('#image-mode').onclick = () => { setImageMode(!imageMode); $('#input').focus() }
+$('#image-mode').onclick = () => { setMode(mode === 'image' ? '' : 'image'); $('#input').focus() }
+$('#video-mode').onclick = () => { setMode(mode === 'video' ? '' : 'video'); $('#input').focus() }
 $('#file').onchange = e => { addFiles([...e.target.files]); e.target.value = '' }
 $('#model').onchange = () => selectModel()
 $('#new-chat').onclick = newChat
@@ -1314,7 +1418,7 @@ $('#toggle-sidebar').onclick = () => document.body.classList.toggle('side-toggle
 $('main').addEventListener('click', e => e.target.closest('#toggle-sidebar') || closeSidebarOnMobile())
 $('#toggle-settings').onclick = () => {
   $('#settings').hidden = !$('#settings').hidden
-  if (!$('#settings').hidden && imageWorkflows.length) loadImageServers()
+  if (!$('#settings').hidden && (imageWorkflows.length || videoWorkflows.length)) loadImageServers()
 }
 $('#open-models').onclick = openModels
 $('#pull-form').onsubmit = e => {
@@ -1327,21 +1431,24 @@ messagesBox.addEventListener('click', e => {
   if (b) copy(b.closest('.code').querySelector('code').textContent, b)
 })
 
-for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize', 'imageSteps', 'imageSeed']) {
+for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize', 'imageSteps', 'imageSeed',
+  'videoWorkflow', 'videoSize', 'videoSeconds']) {
   const input = $('#' + id)
   input.value = settings[id]
   input.onchange = () => { settings[id] = input.value; saveSettings() }
 }
-for (const id of ['imageShare', 'imageTool', 'webResearch']) {
+for (const id of ['imageShare', 'imageTool', 'videoTool', 'webResearch']) {
   const input = $('#' + id)
   input.checked = settings[id]
   input.onchange = () => { settings[id] = input.checked; saveSettings() }
 }
 
-function setImageMode(on) {
-  imageMode = on && imageWorkflows.length > 0
-  $('#image-mode').setAttribute('aria-pressed', String(imageMode))
-  $('#input').placeholder = imageMode ? 'Bild beschreiben (Englisch klappt am besten)…'
+function setMode(m) {
+  mode = m === 'image' && imageWorkflows.length || m === 'video' && videoWorkflows.length ? m : ''
+  $('#image-mode').setAttribute('aria-pressed', String(mode === 'image'))
+  $('#video-mode').setAttribute('aria-pressed', String(mode === 'video'))
+  $('#input').placeholder = mode === 'image' ? 'Bild beschreiben (Englisch klappt am besten)…'
+    : mode === 'video' ? 'Video beschreiben: Szene, Kamera, Handlung, dazu „Audio:“ für Ton und Sprache (Englisch klappt am besten)…'
     : $('#model').value ? `Nachricht an ${$('#model').value}…` : 'Erst ein Modell herunterladen (oben rechts: Modelle)'
 }
 
@@ -1375,13 +1482,19 @@ async function loadWebStatus() {
   for (const e of document.querySelectorAll('.web-only')) e.hidden = !webAvailable
 }
 
-// The workflows ComfyUI can run; none (no workflows/ on the server): no pictures here.
+// The workflows ComfyUI can run; none (no workflows/ on the server): no pictures
+// or clips here.
 async function loadImageWorkflows() {
-  imageWorkflows = (await json('image/workflows').catch(() => null))?.workflows || []
-  const sel = $('#imageWorkflow')
-  sel.replaceChildren(...imageWorkflows.map(w => new Option(w.name, w.id)))
-  if (imageWorkflows.some(w => w.id === settings.imageWorkflow)) sel.value = settings.imageWorkflow
+  const all = (await json('image/workflows').catch(() => null))?.workflows || []
+  imageWorkflows = all.filter(w => w.kind !== 'video')
+  videoWorkflows = all.filter(w => w.kind === 'video')
+  for (const [id, list, key] of [['#imageWorkflow', imageWorkflows, 'imageWorkflow'], ['#videoWorkflow', videoWorkflows, 'videoWorkflow']]) {
+    const sel = $(id)
+    sel.replaceChildren(...list.map(w => Object.assign(new Option(w.name, w.id), {title: w.about || ''})))
+    if (list.some(w => w.id === settings[key])) sel.value = settings[key]
+  }
   for (const e of document.querySelectorAll('.image-only')) e.hidden = !imageWorkflows.length
+  for (const e of document.querySelectorAll('.video-only')) e.hidden = !videoWorkflows.length
   const steps = imageWorkflows[0]?.defaults?.steps
   if (steps) $('#imageSteps').placeholder = `Standard (${steps})`
   await loadImageServers()
