@@ -88,6 +88,17 @@ a { color: inherit; }
 .conn { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px; white-space: nowrap; }
 .top-right { display: flex; align-items: center; gap: 14px; }
 
+/* Welcher ComfyUI-Server: der eigene oder einer im Netz */
+.server-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; color: var(--ink-2); font-size: 13px; }
+.server-pick label { display: flex; align-items: center; gap: 6px; }
+.server-pick select, .server-add input {
+  font: inherit; font-size: 13px; min-height: 32px; padding: 0 8px;
+  color: var(--ink); background: var(--btn); border: 1px solid var(--border); border-radius: 7px;
+}
+.server-add { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.server-add[hidden] { display: none; }
+.server-add input { flex: 1 1 160px; min-width: 0; }
+
 main { max-width: 1320px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
 
 .block {

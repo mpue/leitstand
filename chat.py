@@ -4,7 +4,8 @@ Hervorgegangen aus ollama-chat (~/Documents/devel/ollama-chat): die Seite liegt
 in static/chat.html, die Chats als eine JSON-Datei pro Chat in
 ~/.local/share/ollama-chat/ -- dieselbe Ablage wie vorher, alte Chats sind also
 da. Der Server reicht /chat/api/* an Ollama weiter (streamend), speichert die
-Chats und macht aus angehaengten PDFs Text (pdftotext).
+Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder erzeugt
+ComfyUI (imagegen.py); sie liegen in der Ablage unter images/.
 """
 
 import ipaddress
@@ -19,10 +20,14 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import imagegen
+
 PAGE = Path(__file__).resolve().parent / "static" / "chat.html"
 DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "ollama-chat"
 CHAT_ID = re.compile(r"[0-9a-f]{32}")
 CHAT_PATH = re.compile(r"/chat/chats/([0-9a-f]{32})")
+IMAGE_PATH = re.compile(r"/chat/images/([0-9a-f]{32}\.png)")
+IMAGES = DATA / "images"
 
 
 class ChatStore:
@@ -64,7 +69,14 @@ class ChatStore:
 
     def delete(self, chat_id):
         with self.lock:
-            (self.root / f"{chat_id}.json").unlink(missing_ok=True)
+            path = self.root / f"{chat_id}.json"
+            # Die Bilder, die ComfyUI fuer diesen Chat gemalt hat, gehen mit.
+            try:
+                for name in set(re.findall(r'"images/([0-9a-f]{32}\.png)"', path.read_text("utf-8"))):
+                    (IMAGES / name).unlink(missing_ok=True)
+            except OSError:
+                pass
+            path.unlink(missing_ok=True)
             self.index.pop(chat_id, None)
 
 
@@ -98,8 +110,9 @@ def trusted(handler):
     return origin is None or urlsplit(origin).netloc == host
 
 
-def handle(handler, ollama):
-    """Beantwortet eine Anfrage unter /chat; False, wenn der Pfad nicht dem Chat gehoert."""
+def handle(handler, ollama, comfy):
+    """Beantwortet eine Anfrage unter /chat; False, wenn der Pfad nicht dem Chat gehoert.
+    `comfy` ist der gewaehlte ComfyUI-Server (comfyservers.py): name, url, local."""
     path = urlsplit(handler.path).path
     if path == "/chat":
         handler.send_response(301)
@@ -118,7 +131,18 @@ def handle(handler, ollama):
         return True
     method = handler.command
     if path.startswith("/chat/api/"):
+        if path == "/chat/api/chat":
+            imagegen.release_for_chat()   # das Bildmodell raeumt die Karte fuer den Chat
         proxy(handler, ollama + handler.path[len("/chat"):])   # Pfad und Query, ohne /chat
+    elif path == "/chat/image/workflows" and method == "GET":
+        reply_json(handler, {"workflows": imagegen.workflows(), "server": comfy})
+    elif path == "/chat/image" and method == "POST":
+        image(handler, ollama, comfy)
+    elif (m := IMAGE_PATH.fullmatch(path)) and method == "GET":
+        try:
+            reply(handler, 200, (IMAGES / m[1]).read_bytes(), "image/png")
+        except OSError:
+            reply_json(handler, {"error": "Bild nicht gefunden"}, 404)
     elif path == "/chat/" and method == "GET":
         try:
             reply(handler, 200, PAGE.read_bytes(), "text/html; charset=utf-8")
@@ -152,6 +176,24 @@ def chat(handler, chat_id):
         reply(handler, 204)
     else:
         reply_json(handler, {"error": "Methode nicht erlaubt"}, 405)
+
+
+def image(handler, ollama, comfy):
+    """Ein Bild von ComfyUI, als NDJSON-Strom der Zustaende (siehe imagegen.run)."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+    except ValueError:
+        return reply_json(handler, {"error": "Ungültiges JSON"}, 400)
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/x-ndjson")
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    try:
+        for state in imagegen.run(req, ollama, comfy, IMAGES):
+            handler.wfile.write((json.dumps(state, ensure_ascii=False) + "\n").encode())
+            handler.wfile.flush()
+    except ConnectionError:
+        pass  # Seite zu: das Bild entsteht trotzdem fertig, es holt nur keiner ab
 
 
 def pdf_text(handler):

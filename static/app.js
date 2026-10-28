@@ -404,18 +404,50 @@ function workflowFile(wf, kind, loadedOfKind) {
   return !same.length && ckpt.length === 1 ? ckpt[0].file : null;
 }
 
+// Die Auswahl des Servers; nur neu gezeichnet, wenn sich die Liste aendert
+// (setHTML vergleicht), damit eine offene Auswahl nicht zuklappt.
+function renderServers(c) {
+  const root = document.getElementById("svc-comfy");
+  const opts = (c.servers || []).map(s =>
+    `<option value="${esc(s.id)}"${s.id === c.server?.id ? " selected" : ""}>${esc(s.name)}${s.local ? "" : ` · ${esc(s.url)}`}</option>`).join("");
+  setHTML($("[data-servers]", root),
+    `<label>Server <select data-server-select>${opts}<option value="+">+ Server hinzufügen…</option></select></label>` +
+    (c.server && !c.server.local
+      ? button("comfy-server-delete", "Entfernen", { model: c.server.id, small: true, confirm: "Wirklich entfernen?" }) : ""));
+}
+
+// Ein entfernter Server: kein Dienst hier, also Status, Adresse und was die API sagt.
+function renderRemoteComfy(c, extra, queue) {
+  const root = document.getElementById("svc-comfy");
+  setHTML($("[data-status]", root), c.up ? `<span class="dot good"></span>läuft` : `<span class="dot crit"></span>antwortet nicht`);
+  const bits = [c.version && `<span>v${esc(c.version)}</span>`, `<span>${esc(c.url)}</span>`,
+    c.devices?.[0]?.name && `<span>${esc(c.devices[0].name.replace(/^cuda:\d+\s*/, "").replace(/\s*:\s*cudaMallocAsync$/, ""))}</span>`, queue,
+    !c.up && `<span class="warnline">Läuft ComfyUI dort mit <code>--listen</code>, und ist der Port frei?</span>`];
+  setHTML($("[data-meta]", root), bits.filter(Boolean).join(""));
+  setHTML($("[data-actions]", root), extra.join(""));
+  $("[data-log]", root).hidden = true;
+  return root;
+}
+
 function renderComfy(c) {
+  renderServers(c);
   const port = portOf(c.url);
+  const remote = c.server && !c.server.local;
+  if (remote) logOpen.comfy = false;   // das Log ist das des eigenen Dienstes
   const extra = [button("comfy-free", "Speicher freigeben", { disabled: !c.up })];
-  if (c.up) extra.push(`<a class="btn" href="${esc(`${location.protocol}//${location.hostname}:${port}/`)}" target="_blank" rel="noopener">ComfyUI öffnen ↗</a>`);
+  // Der eigene: unter der Adresse, unter der der Leitstand offen ist (auch aus dem LAN).
+  const open = remote ? c.url : `${location.protocol}//${location.hostname}:${port}`;
+  if (c.up) extra.push(`<a class="btn" href="${esc(open + "/")}" target="_blank" rel="noopener">ComfyUI öffnen ↗</a>`);
   const queue = c.up && c.queue
     ? `<span>Warteschlange: ${c.queue.running ? "1 läuft" : "leer"}${c.queue.pending ? `, ${c.queue.pending} wartend` : ""}</span>` : "";
-  const root = renderService("comfy", c, port, extra, queue);
+  const root = remote ? renderRemoteComfy(c, extra, queue) : renderService("comfy", c, port, extra, queue);
 
   const wf = c.workflow;
   let html;
   if (!c.up) html = `<div class="empty">ComfyUI läuft nicht.</div>`;
-  else if (c.loaded == null) html = `<div class="hint">Der Leitstand-Node fehlt in ComfyUI. <code>install.sh</code> verlinkt ihn nach <code>custom_nodes</code>, danach ComfyUI neu starten.</div>`;
+  else if (c.loaded == null) html = remote
+    ? `<div class="hint">Auf diesem Server fehlt der Leitstand-Node: <code>comfy_node/leitstand_status.py</code> in dessen <code>custom_nodes</code> legen und ComfyUI neu starten.</div>`
+    : `<div class="hint">Der Leitstand-Node fehlt in ComfyUI. <code>install.sh</code> verlinkt ihn nach <code>custom_nodes</code>, danach ComfyUI neu starten.</div>`;
   else if (!c.loaded.length) html = `<div class="empty">Keine Modelle im Speicher.</div>`;
   else html = c.loaded.map(m => {
     const kind = comfyKind(m.class);
@@ -470,6 +502,7 @@ async function post(url, body) {
   let j = {};
   try { j = await r.json(); } catch { /* leerer Body */ }
   if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
 }
 
 async function act(btn) {
@@ -499,9 +532,13 @@ async function act(btn) {
     } else if (kind === "comfy-free") {
       await post("/api/comfy/free");
       toast("ComfyUI hat Modelle und Cache freigegeben.", true);
+    } else if (kind === "comfy-server-delete") {
+      await post(`/api/comfy/servers/${model}/delete`);
+      toast("Server entfernt, es gilt wieder der eigene.", true);
     }
   } catch (e) {
-    const what = { svc: `Dienst ${svc}`, "ollama-load": `Laden von ${model}`, "ollama-unload": `Entladen von ${model}`, "comfy-free": "Speicher freigeben" }[kind];
+    const what = { svc: `Dienst ${svc}`, "ollama-load": `Laden von ${model}`, "ollama-unload": `Entladen von ${model}`,
+      "comfy-free": "Speicher freigeben", "comfy-server-delete": "Entfernen des Servers" }[kind];
     toast(`${what} fehlgeschlagen:\n${e.message}`);
   } finally {
     busy.delete(key);
@@ -513,6 +550,47 @@ document.addEventListener("click", e => {
   const btn = e.target.closest("button[data-act]");
   if (btn && !btn.disabled) act(btn);
 });
+
+// --- ComfyUI-Server ----------------------------------------------------------
+
+const serverForm = $("[data-server-add]");
+
+async function selectServer(id, quiet = false) {
+  try {
+    const j = await post(`/api/comfy/servers/${id}/select`);
+    if (!quiet) toast(`ComfyUI-Server: ${j.servers.find(s => s.id === id)?.name}`, true);
+  } catch (e) {
+    toast(`Umschalten fehlgeschlagen:\n${e.message}`);
+  }
+  await poll();
+}
+
+document.addEventListener("change", e => {
+  const sel = e.target.closest("[data-server-select]");
+  if (!sel) return;
+  if (sel.value === "+") {
+    sel.value = state?.comfy?.server?.id || "local";
+    serverForm.hidden = false;
+    serverForm.elements.name.focus();
+    return;
+  }
+  selectServer(sel.value);
+});
+
+serverForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = serverForm.elements;
+  try {
+    const j = await post("/api/comfy/servers", { name: f.name.value, url: f.url.value });
+    serverForm.hidden = true;
+    serverForm.reset();
+    toast(`${j.added.name} hinzugefügt${j.reachable ? "" : " -- antwortet gerade nicht"}.`, j.reachable);
+    await selectServer(j.added.id, true);
+  } catch (err) {
+    toast(`Hinzufügen fehlgeschlagen:\n${err.message}`);
+  }
+});
+$("[data-server-add-cancel]").addEventListener("click", () => { serverForm.hidden = true; serverForm.reset(); });
 
 // --- Takt --------------------------------------------------------------------
 

@@ -66,6 +66,20 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 .meta .stats { margin-right: 6px; }
 .images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .images img { max-height: 180px; max-width: 260px; border-radius: 8px; display: block; }
+/* Pictures ComfyUI painted: shown big, a click opens the full size */
+.generated { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 8px; }
+.generated figure { margin: 0; }
+.generated img { display: block; max-width: 100%; max-height: 70vh; border-radius: 10px; background: var(--bg-soft); }
+.generated figcaption { margin-top: 4px; color: var(--fg-soft); font-size: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+.generated figcaption .p { flex-basis: 100%; color: var(--fg); font-style: italic; }
+.generated figcaption a { color: inherit; }
+.image-state { color: var(--fg-soft); font-size: 13px; display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.image-state::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--fg-soft); border-top-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.msg.tool { display: none; }
+#image-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+#settings .group { grid-column: 1 / -1; margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--fg-soft); text-transform: uppercase; letter-spacing: .05em; }
+#settings label.check { flex-direction: row; align-items: center; gap: 6px; }
 .error { color: var(--danger); font-size: 14px; }
 .error:empty { display: none; }
 details.thinking { border-left: 3px solid var(--border); padding-left: 12px; margin-bottom: 12px; color: var(--fg-soft); font-size: 14px; }
@@ -174,6 +188,34 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
         <option value="high">Hoch</option>
       </select>
     </label>
+    <div class="group image-only">Bilder (ComfyUI)</div>
+    <label class="image-only" title="Gilt auch für die ComfyUI-Karte im Leitstand">Server
+      <select id="imageServer"></select>
+    </label>
+    <label class="image-only">Workflow
+      <select id="imageWorkflow"></select>
+    </label>
+    <label class="image-only">Format
+      <select id="imageSize">
+        <option value="1024x1024">Quadrat 1024 × 1024</option>
+        <option value="1152x896">Quer 1152 × 896</option>
+        <option value="896x1152">Hoch 896 × 1152</option>
+        <option value="1344x768">Breit 16:9 · 1344 × 768</option>
+        <option value="768x1344">Handy 9:16 · 768 × 1344</option>
+      </select>
+    </label>
+    <label class="image-only">Schritte
+      <input id="imageSteps" type="number" min="1" max="100" placeholder="Standard">
+    </label>
+    <label class="image-only">Seed
+      <input id="imageSeed" type="number" min="0" placeholder="Zufall">
+    </label>
+    <label class="image-only check wide" title="Ollamas Modelle und ComfyUIs Bildmodell passen nicht zusammen in den Grafikspeicher">
+      <input id="imageShare" type="checkbox"> Grafikspeicher teilen: vor einem Bild die Ollama-Modelle entladen, vor der nächsten Antwort ComfyUIs
+    </label>
+    <label class="image-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können">
+      <input id="imageTool" type="checkbox"> Das Chat-Modell darf selbst Bilder malen lassen („mal mir …“)
+    </label>
   </section>
 
   <div id="messages"></div>
@@ -184,6 +226,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
       <textarea id="input" rows="1" placeholder="Nachricht…" autofocus></textarea>
       <div class="row">
         <button type="button" id="attach" class="ghost">＋ Datei</button>
+        <button type="button" id="image-mode" class="ghost image-only" aria-pressed="false"
+                title="Die Nachricht als Bildbeschreibung direkt an ComfyUI schicken">🖼 Bild</button>
         <input type="file" id="file" multiple hidden>
         <span class="spacer"></span>
         <span class="hint">Enter senden · Shift+Enter neue Zeile · Esc stoppt</span>
@@ -221,7 +265,8 @@ const el = (tag, cls, text) => {
 const esc = s => s.replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c])
 const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1) + ' GB'
 
-let settings = {model: '', temperature: '', num_ctx: '', think: '', system: ''}
+let settings = {model: '', temperature: '', num_ctx: '', think: '', system: '',
+  imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true}
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ollama-chat') || '{}')) } catch {}
 const saveSettings = () => localStorage.setItem('ollama-chat', JSON.stringify(settings))
 
@@ -234,6 +279,24 @@ let pullAbort = null
 let canSeeImages = true
 let pendingImages = []  // data URLs for the next message
 let pendingFiles = []   // {name, content} text attachments for the next message
+let imageWorkflows = [] // ComfyUI workflows the server offers (image/workflows)
+let imageMode = false   // the next message is a picture description, not a question
+let canUseTools = false
+
+// What the chat model may call when it wants a picture.
+const IMAGE_TOOL = {type: 'function', function: {
+  name: 'generate_image',
+  description: 'Paints a picture with ComfyUI on this computer and shows it to the user in the chat. ' +
+    'Use it whenever the user wants an image, picture, photo, drawing or illustration. ' +
+    'Write the prompt in English and in detail: subject, setting, style, light, colours, camera/perspective. ' +
+    'Give the format only through width and height (landscape: wider than high), never in the prompt.',
+  parameters: {type: 'object', required: ['prompt'], properties: {
+    prompt: {type: 'string', description: 'Detailed English description of the picture'},
+    width: {type: 'integer', description: 'Width in pixels. About one megapixel works best: square 1024x1024, ' +
+      'landscape 1344x768 or 1152x896, portrait 768x1344 or 896x1152'},
+    height: {type: 'integer', description: 'Height in pixels (see width)'},
+  }},
+}}
 
 // ---------- Markdown ----------
 
@@ -414,7 +477,7 @@ async function selectModel(name) {
     settings.model = model
     saveSettings()
   }
-  $('#input').placeholder = model ? `Nachricht an ${model}…` : 'Erst ein Modell herunterladen (oben rechts: Modelle)'
+  setImageMode(imageMode)   // the placeholder says what the next message will be
   let info = null
   if (model) {
     info = modelInfo[model] ??= await json('api/show', {method: 'POST', body: JSON.stringify({model})}).catch(() => ({}))
@@ -424,6 +487,7 @@ async function selectModel(name) {
   const ctxKey = Object.keys(info?.model_info || {}).find(k => k.endsWith('.context_length'))
   const ctx = ctxKey && info.model_info[ctxKey]
   canSeeImages = has('vision')
+  canUseTools = !!caps?.includes('tools')
   $('#attach').disabled = !model
   $('#attach').title = `Text-, Code- und PDF-Dateien${canSeeImages ? ' oder Bilder' : ''} anhängen (auch per Einfügen oder Drag & Drop)`
   $('#think').disabled = !has('thinking')
@@ -570,8 +634,10 @@ function renderChatList() {
 
 function exportChat() {
   if (!chat.messages.length) return
-  const md = `# ${chat.title}\n\n` + chat.messages.map(m =>
-    `**${m.role === 'user' ? 'Du' : m.model || 'Assistent'}:**\n\n${toOllama(m).content}`).join('\n\n---\n\n') + '\n'
+  const md = `# ${chat.title}\n\n` + chat.messages.filter(m => m.role !== 'tool').map(m =>
+    `**${m.role === 'user' ? 'Du' : m.model || 'Assistent'}:**\n\n${toOllama(m).content}` +
+    (m.generated || []).map(g => `\n\n![${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('')
+  ).join('\n\n---\n\n') + '\n'
   const a = el('a')
   a.href = URL.createObjectURL(new Blob([md], {type: 'text/markdown'}))
   a.download = (chat.title || 'chat').replace(/[\\/:*?"<>|]+/g, '_') + '.md'
@@ -614,6 +680,7 @@ function action(label, fn) {
 
 function renderMessage(m, i) {
   const wrap = el('div', 'msg ' + m.role)
+  if (m.role === 'tool') return wrap   // what a tool answered goes to the model, not on screen
   const bubble = el('div', 'bubble')
   if (m.images?.length) {
     const imgs = el('div', 'images')
@@ -640,13 +707,40 @@ function renderMessage(m, i) {
   } else {
     const think = el('details', 'thinking')
     think.append(el('summary'), el('div', 'md'))
-    bubble.append(think, el('div', 'md content'), el('div', 'error'))
+    bubble.append(think, el('div', 'md content'), renderGenerated(m), el('div', 'error'))
     meta.append(el('span', 'stats'), action('Kopieren', b => copy(splitThink(m.content)[1], b)))
     if (i === chat.messages.length - 1) meta.append(action('Neu generieren', regenerate))
   }
   wrap.append(bubble, meta)
   if (m.role === 'assistant') updateAssistant(wrap, m, false)
   return wrap
+}
+
+function renderGenerated(m) {
+  const box = el('div', 'generated')
+  for (const g of m.generated || []) {
+    const fig = el('figure'), a = el('a'), img = el('img')
+    a.href = g.url
+    a.target = '_blank'
+    img.src = g.url
+    img.alt = g.prompt
+    img.loading = 'lazy'
+    a.append(img)
+    const cap = el('figcaption')
+    const dl = el('a', '', 'Herunterladen')
+    dl.href = g.url
+    dl.download = `${(g.prompt || 'bild').slice(0, 40).replace(/[^\w äöüÄÖÜß-]+/g, '').trim() || 'bild'}-${g.seed}.png`
+    cap.append(el('span', 'p', g.prompt),
+      el('span', '', [g.workflow_name, g.server, g.width && `${g.width} × ${g.height}`, g.steps && `${g.steps} Schritte`,
+        `Seed ${g.seed}`, g.seconds && `${g.seconds} s`].filter(Boolean).join(' · ')),
+      dl, action('Prompt kopieren', b => copy(g.prompt, b)),
+      action('Seed übernehmen', () => { settings.imageSeed = $('#imageSeed').value = String(g.seed); saveSettings(); toast(`Seed ${g.seed} gilt für die nächsten Bilder`) }))
+    fig.append(a, cap)
+    box.append(fig)
+  }
+  if (m.imageState) box.append(el('div', 'image-state', m.imageState))
+  box.hidden = !box.childElementCount
+  return box
 }
 
 function updateAssistant(wrap, m, streaming) {
@@ -658,7 +752,8 @@ function updateAssistant(wrap, m, streaming) {
     think.querySelector('summary').textContent = streaming && !content ? 'Denkt nach…' : 'Gedankengang'
     think.querySelector('.md').innerHTML = markdown(thinking)
   }
-  wrap.querySelector('.content').innerHTML = content || !streaming || thinking ? markdown(content) : '<span class="typing"></span>'
+  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.generated?.length
+    ? markdown(content) : '<span class="typing"></span>'
   wrap.querySelector('.error').textContent = m.error || ''
   wrap.querySelector('.stats').textContent = stats(m)
 }
@@ -699,15 +794,28 @@ function toOllama(m) {
     const fence = '`'.repeat(Math.max(3, ...(f.content.match(/`{3,}/g) || []).map(s => s.length + 1)))
     return `Datei: ${f.name}\n${fence}\n${f.content}\n${fence}`
   })
-  const content = m.role === 'assistant' ? splitThink(m.content)[1] : m.content
+  let content = m.role === 'assistant' ? splitThink(m.content)[1] : m.content
+  // A picture made by the image switch: the model hears that it exists.
+  if (m.generated?.length && !m.toolCalls?.length && !content.trim())
+    content = m.generated.map(g => `[Bild mit ComfyUI erzeugt: „${g.prompt}“]`).join('\n')
   const out = {role: m.role, content: [...files, content].filter(Boolean).join('\n\n')}
   if (m.images?.length) out.images = m.images.map(u => u.slice(u.indexOf(',') + 1))
+  if (m.toolCalls?.length) out.tool_calls = m.toolCalls
+  if (m.role === 'tool') out.tool_name = m.toolName
   return out
 }
 
 async function send() {
   const text = $('#input').value.trim()
   if (abort || (!text && !pendingImages.length && !pendingFiles.length)) return
+  if (imageMode && text) {
+    chat.messages.push({role: 'user', content: text, imageMode: true})
+    chat.title ||= '🖼 ' + text.split('\n')[0].slice(0, 58)
+    $('#input').value = ''
+    autosize()
+    renderChat()
+    return paint()
+  }
   if (!$('#model').value) return openModels()
   chat.messages.push({role: 'user', content: text, ...(pendingImages.length && {images: pendingImages}), ...(pendingFiles.length && {files: pendingFiles})})
   chat.title ||= text.split('\n')[0].slice(0, 60) || pendingFiles[0]?.name || 'Bild'
@@ -720,9 +828,99 @@ async function send() {
   await generate()
 }
 
-async function generate() {
+// ---------- Pictures ----------
+
+const imageSettings = () => {
+  const [width, height] = settings.imageSize.split('x').map(Number)
+  return {workflow: settings.imageWorkflow || imageWorkflows[0]?.id, width, height,
+    steps: Number(settings.imageSteps) || undefined,
+    seed: settings.imageSeed !== '' ? Number(settings.imageSeed) : undefined,
+    free_vram: settings.imageShare}
+}
+
+const STATE_TEXT = {
+  starting: () => 'ComfyUI wird gestartet…',
+  vram: s => `Grafikspeicher wird frei gemacht (${s.models.join(', ')})…`,
+  queued: s => s.position ? `Wartet in ComfyUIs Schlange (${s.position} davor)…` : 'Wartet in ComfyUIs Schlange…',
+  running: () => 'ComfyUI malt…',
+}
+
+// One picture into `msg`, drawn as it goes by `redraw`. Resolves to what the
+// tool answers the model: what was made, or why not.
+async function makeImage(req, msg, redraw, signal) {
+  const t0 = performance.now()
+  let state = 'Auftrag an ComfyUI…'
+  const tick = setInterval(() => {
+    msg.imageState = `${state} ${Math.round((performance.now() - t0) / 1000)} s`
+    redraw()
+  }, 1000)
+  msg.imageState = state
+  redraw()
+  try {
+    const res = await api('image', {method: 'POST', body: JSON.stringify({...imageSettings(), ...req}), signal})
+    for await (const s of ndjson(res)) {
+      if (s.state === 'done') {
+        msg.generated = [...(msg.generated || []), ...s.images.map(url => ({url, prompt: s.prompt, seed: s.seed,
+          width: s.width, height: s.height, steps: s.steps, seconds: s.seconds, workflow_name: s.workflow_name,
+          server: s.server}))]
+        return {ok: true, shown_to_user: true, seed: s.seed, width: s.width, height: s.height}
+      }
+      if (s.state === 'error') throw new Error(s.error)
+      state = STATE_TEXT[s.state]?.(s) || state
+      msg.imageState = state
+      redraw()
+    }
+    throw new Error('ComfyUI hat kein Bild geliefert')
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    msg.error = (msg.error ? msg.error + '\n' : '') + 'Bild: ' + e.message
+    return {ok: false, error: e.message}
+  } finally {
+    clearInterval(tick)
+    delete msg.imageState
+    redraw()
+  }
+}
+
+// The image switch: the last message is the description, ComfyUI the painter.
+async function paint() {
+  const c = chat, prompt = c.messages.at(-1).content
+  const wf = imageWorkflows.find(w => w.id === imageSettings().workflow)
+  const server = $('#imageServer').selectedOptions[0]?.textContent.split(' · ')[0]
+  const msg = {role: 'assistant', content: '', model: `ComfyUI · ${wf?.name || 'Bild'}${server ? ` · ${server}` : ''}`}
+  c.messages.push(msg)
+  messagesBox.querySelector('.empty')?.remove()
+  let wrap = renderMessage(msg, c.messages.length - 1)
+  messagesBox.append(wrap)
+  messagesBox.scrollTop = messagesBox.scrollHeight
+  const redraw = () => {
+    if (chat !== c) return
+    const stick = nearBottom()
+    wrap.replaceWith(wrap = renderMessage(msg, c.messages.length - 1))
+    if (stick) messagesBox.scrollTop = messagesBox.scrollHeight
+  }
+  const ctrl = abort = new AbortController()
+  setBusy(true)
+  try {
+    await makeImage({prompt}, msg, redraw, ctrl.signal)
+  } catch (e) {
+    if (e.name !== 'AbortError') msg.error = e.message
+  } finally {
+    if (abort === ctrl) {
+      abort = null
+      setBusy(false)
+    }
+    c.updated = Date.now()
+    redraw()
+    await saveChat(c)
+  }
+}
+
+async function generate(round = 0) {
   const c = chat, model = $('#model').value
-  const history = c.messages.filter(m => m.role === 'user' || splitThink(m.content)[1].trim())
+  // Tool calls and their answers belong to the conversation even without text.
+  const history = c.messages.filter(m => m.role === 'user' || m.role === 'tool' || m.toolCalls?.length ||
+    m.generated?.length || splitThink(m.content)[1].trim())
   const msg = {role: 'assistant', content: '', thinking: '', model}
   c.model = model
   c.messages.push(msg)
@@ -740,10 +938,11 @@ async function generate() {
   if (settings.temperature !== '') body.options.temperature = Number(settings.temperature)
   if (settings.num_ctx !== '') body.options.num_ctx = Number(settings.num_ctx)
   if (settings.think && !$('#think').disabled) body.think = {on: true, off: false}[settings.think] ?? settings.think
+  if (settings.imageTool && canUseTools && imageWorkflows.length) body.tools = [IMAGE_TOOL]
 
   const ctrl = abort = new AbortController()
   setBusy(true)
-  let frame = 0
+  let frame = 0, followUp = false
   const update = () => {
     frame = 0
     const stick = nearBottom()
@@ -755,11 +954,43 @@ async function generate() {
     for await (const chunk of ndjson(res)) {
       msg.content += chunk.message?.content || ''
       msg.thinking += chunk.message?.thinking || ''
+      if (chunk.message?.tool_calls?.length) msg.toolCalls = [...(msg.toolCalls || []), ...chunk.message.tool_calls]
       if (chunk.done) {
         const {eval_count, eval_duration, prompt_eval_count, done_reason} = chunk
         msg.stats = {eval_count, eval_duration, prompt_eval_count, done_reason}
       }
       frame ||= requestAnimationFrame(update)
+    }
+    // Qwen models sometimes write a call as text, whole or begun: taken out of
+    // the answer, and run when it is whole.
+    msg.content = msg.content.replace(/<tool_call>([\s\S]*?)(?:<\/tool_call>|$)/g, (_, inner) => {
+      try {
+        const j = JSON.parse(inner)
+        if (j.name) msg.toolCalls = [...(msg.toolCalls || []), {function: {name: j.name, arguments: j.arguments || {}}}]
+      } catch {}
+      return ''
+    }).trimEnd()
+    // The model asked for pictures: ComfyUI paints them into this message, the
+    // answers go back to the model as tool messages, and it gets another turn.
+    if (msg.toolCalls?.length) {
+      cancelAnimationFrame(frame)
+      const redraw = () => {
+        if (chat !== c) return
+        const stick = nearBottom()
+        wrap.replaceWith(wrap = renderMessage(msg, c.messages.length - 1))
+        if (stick) messagesBox.scrollTop = messagesBox.scrollHeight
+      }
+      for (const call of msg.toolCalls) {
+        const f = call.function || {}
+        let args = f.arguments || {}
+        if (typeof args === 'string') try { args = JSON.parse(args) } catch { args = {} }
+        const result = f.name === 'generate_image' && args.prompt
+          ? await makeImage({prompt: args.prompt, ...(args.width && {width: args.width}), ...(args.height && {height: args.height})},
+              msg, redraw, ctrl.signal)
+          : {ok: false, error: `Es gibt kein Werkzeug ${f.name}`}
+        c.messages.push({role: 'tool', toolName: f.name, content: JSON.stringify(result)})
+      }
+      followUp = round < 3
     }
   } catch (e) {
     if (e.name !== 'AbortError') msg.error = e.message
@@ -778,19 +1009,26 @@ async function generate() {
     }
     await saveChat(c)
   }
+  if (followUp && chat === c) {
+    renderChat()   // "Neu generieren" moves on to the answer that follows
+    await generate(round + 1)
+  }
 }
 
 function regenerate() {
   if (abort) return
-  chat.messages.pop()
+  // Back to the question: a tool round leaves call, answers and reply behind it.
+  while (chat.messages.length && chat.messages.at(-1).role !== 'user') chat.messages.pop()
   renderChat()
-  generate()
+  if (chat.messages.at(-1)?.imageMode) paint()
+  else generate()
 }
 
 function editMessage(i) {
   if (abort) return
   const m = chat.messages[i]
   chat.messages.splice(i)
+  setImageMode(!!m.imageMode)
   $('#input').value = m.content
   pendingImages = m.images || []
   pendingFiles = m.files || []
@@ -925,13 +1163,17 @@ document.addEventListener('keydown', e => {
 })
 
 $('#attach').onclick = () => $('#file').click()
+$('#image-mode').onclick = () => { setImageMode(!imageMode); $('#input').focus() }
 $('#file').onchange = e => { addFiles([...e.target.files]); e.target.value = '' }
 $('#model').onchange = () => selectModel()
 $('#new-chat').onclick = newChat
 $('#export').onclick = exportChat
 $('#toggle-sidebar').onclick = () => document.body.classList.toggle('side-toggled')
 $('main').addEventListener('click', e => e.target.closest('#toggle-sidebar') || closeSidebarOnMobile())
-$('#toggle-settings').onclick = () => $('#settings').hidden = !$('#settings').hidden
+$('#toggle-settings').onclick = () => {
+  $('#settings').hidden = !$('#settings').hidden
+  if (!$('#settings').hidden && imageWorkflows.length) loadImageServers()
+}
 $('#open-models').onclick = openModels
 $('#pull-form').onsubmit = e => {
   e.preventDefault()
@@ -943,10 +1185,58 @@ messagesBox.addEventListener('click', e => {
   if (b) copy(b.closest('.code').querySelector('code').textContent, b)
 })
 
-for (const id of ['temperature', 'num_ctx', 'think']) {
+for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize', 'imageSteps', 'imageSeed']) {
   const input = $('#' + id)
   input.value = settings[id]
   input.onchange = () => { settings[id] = input.value; saveSettings() }
+}
+for (const id of ['imageShare', 'imageTool']) {
+  const input = $('#' + id)
+  input.checked = settings[id]
+  input.onchange = () => { settings[id] = input.checked; saveSettings() }
+}
+
+function setImageMode(on) {
+  imageMode = on && imageWorkflows.length > 0
+  $('#image-mode').setAttribute('aria-pressed', String(imageMode))
+  $('#input').placeholder = imageMode ? 'Bild beschreiben (Englisch klappt am besten)…'
+    : $('#model').value ? `Nachricht an ${$('#model').value}…` : 'Erst ein Modell herunterladen (oben rechts: Modelle)'
+}
+
+// Which ComfyUI paints: one setting for the whole Leitstand (its ComfyUI card
+// shows and switches the same), so it is asked of the Leitstand, not kept here.
+async function loadImageServers() {
+  const j = await json('/api/comfy/servers').catch(() => null)
+  const sel = $('#imageServer')
+  sel.replaceChildren(...(j?.servers || []).map(s => new Option(s.local ? s.name : `${s.name} · ${s.url}`, s.id)))
+  sel.value = j?.active || 'local'
+  const remote = j?.servers?.find(s => s.id === j.active && !s.local)
+  // Another machine's card: nothing to make room for on this one.
+  $('#imageShare').disabled = !!remote
+  $('#imageShare').parentElement.title = remote
+    ? `${remote.name} rechnet auf seiner eigenen Grafikkarte: hier wird nichts entladen`
+    : 'Ollamas Modelle und ComfyUIs Bildmodell passen nicht zusammen in den Grafikspeicher'
+}
+
+$('#imageServer').onchange = async () => {
+  try {
+    await json(`/api/comfy/servers/${$('#imageServer').value}/select`, {method: 'POST'})
+  } catch (e) {
+    toast('Umschalten fehlgeschlagen: ' + e.message)
+  }
+  await loadImageServers()
+}
+
+// The workflows ComfyUI can run; none (no workflows/ on the server): no pictures here.
+async function loadImageWorkflows() {
+  imageWorkflows = (await json('image/workflows').catch(() => null))?.workflows || []
+  const sel = $('#imageWorkflow')
+  sel.replaceChildren(...imageWorkflows.map(w => new Option(w.name, w.id)))
+  if (imageWorkflows.some(w => w.id === settings.imageWorkflow)) sel.value = settings.imageWorkflow
+  for (const e of document.querySelectorAll('.image-only')) e.hidden = !imageWorkflows.length
+  const steps = imageWorkflows[0]?.defaults?.steps
+  if (steps) $('#imageSteps').placeholder = `Standard (${steps})`
+  await loadImageServers()
 }
 $('#system').oninput = () => {
   chat.system = settings.system = $('#system').value
@@ -955,7 +1245,7 @@ $('#system').oninput = () => {
 
 async function init() {
   chat = {id: newId(), title: '', model: '', system: settings.system, messages: [], created: Date.now(), updated: Date.now()}
-  await Promise.all([loadModels(), loadChats()])
+  await Promise.all([loadModels(), loadChats(), loadImageWorkflows()])
   const id = location.hash.slice(1)
   if (chats.some(c => c.id === id)) await openChat(id)
   else newChat()

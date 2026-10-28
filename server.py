@@ -21,11 +21,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import chat
+import comfyservers
 
 HOST = os.environ.get("LEITSTAND_HOST", "0.0.0.0")
 PORT = int(os.environ.get("LEITSTAND_PORT", "8100"))
 OLLAMA = os.environ.get("LEITSTAND_OLLAMA", "http://127.0.0.1:11434")
-COMFY = os.environ.get("LEITSTAND_COMFY", "http://127.0.0.1:8188")
+COMFY = os.environ.get("LEITSTAND_COMFY", "http://127.0.0.1:8188")   # der eigene; weitere: comfyservers.py
 COMFY_DIR = os.environ.get("LEITSTAND_COMFY_DIR", str(Path.home() / "Documents/devel/ComfyUI"))
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -285,9 +286,20 @@ def workflow_models(prompt):
     return found
 
 
+SERVERS = comfyservers.Servers(COMFY)
+_comfy_quiet_until = {}   # entfernter Server antwortet nicht: nicht bei jedem Abruf eine Sekunde warten
+
+
 def comfy_state():
-    st = {"service": unit_status(SERVICES["comfy"]), "url": COMFY}
-    stats = try_json(COMFY + "/system_stats", timeout=1)
+    srv = SERVERS.active()
+    url = srv["url"]
+    st = {"service": unit_status(SERVICES["comfy"]), "url": url, "server": srv, "servers": SERVERS.list()}
+    if not srv["local"] and time.monotonic() < _comfy_quiet_until.get(url, 0):
+        stats = None
+    else:
+        stats = try_json(url + "/system_stats", timeout=1)
+        if stats is None and not srv["local"]:
+            _comfy_quiet_until[url] = time.monotonic() + 8
     st["up"] = stats is not None
     st["version"] = st["queue"] = st["loaded"] = st["workflow"] = None
     st["devices"] = []
@@ -298,15 +310,15 @@ def comfy_state():
     st["devices"] = [{"name": d.get("name"), "vram_total": d.get("vram_total"), "vram_free": d.get("vram_free"),
                       "torch_total": d.get("torch_vram_total"), "torch_free": d.get("torch_vram_free")}
                      for d in stats.get("devices", [])]
-    q = try_json(COMFY + "/queue") or {}
+    q = try_json(url + "/queue") or {}
     running, pending = q.get("queue_running", []), q.get("queue_pending", [])
     st["queue"] = {"running": len(running), "pending": len(pending)}
-    st["loaded"] = try_json(COMFY + "/leitstand/models")  # None ohne den Custom Node
+    st["loaded"] = try_json(url + "/leitstand/models")  # None ohne den Custom Node
     source = None
     if running and len(running[0]) > 2:
         source = {"state": "läuft", "prompt": running[0][2]}
     else:
-        hist = try_json(COMFY + "/history?max_items=1") or {}
+        hist = try_json(url + "/history?max_items=1") or {}
         for entry in hist.values():
             p = entry.get("prompt") or []
             status = (entry.get("status") or {}).get("status_str")
@@ -319,7 +331,7 @@ def comfy_state():
 
 def comfy_free():
     try:
-        http_json(COMFY + "/free", {"unload_models": True, "free_memory": True}, timeout=30)
+        http_json(SERVERS.active()["url"] + "/free", {"unload_models": True, "free_memory": True}, timeout=30)
     except (OSError, ValueError, urllib.error.URLError) as e:
         return False, str(e)
     return True, ""
@@ -348,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if chat.handle(self, OLLAMA):   # /chat/: der Chat mit Ollama (chat.py)
+        if chat.handle(self, OLLAMA, SERVERS.active()):   # /chat/: der Chat mit Ollama (chat.py)
             return
         url = urlparse(self.path)
         if url.path in STATIC_FILES:
@@ -373,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
                 "gpu": {"name": SAMPLER.gpu_name, "samples": samples, "processes": procs},
                 "ollama": ollama_state(), "comfy": comfy_state(),
             })
+        if url.path == "/api/comfy/servers":
+            return self.send_json({"servers": SERVERS.list(), "active": SERVERS.active()["id"]})
         m = re.fullmatch(r"/api/logs/(\w+)", url.path)
         if m and m.group(1) in SERVICES:
             n = max(10, min(1000, int(q.get("n", ["150"])[0])))
@@ -380,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        if chat.handle(self, OLLAMA):   # prueft den Header selbst, liest den Body selbst
+        if chat.handle(self, OLLAMA, SERVERS.active()):   # prueft den Header selbst, liest den Body selbst
             return
         # Eigener Header erzwingt bei fremden Webseiten einen CORS-Preflight,
         # den wir nie beantworten: kein Start/Stopp per untergeschobenem Formular.
@@ -399,13 +413,31 @@ class Handler(BaseHTTPRequestHandler):
             ok, err = ollama_keep_alive(body["model"], 0 if path.endswith("unload") else None)
         elif path == "/api/comfy/free":
             ok, err = comfy_free()
+        elif path == "/api/comfy/servers":
+            return self.servers_action(lambda: SERVERS.add(body.get("name"), body.get("url")))
+        elif m := re.fullmatch(r"/api/comfy/servers/(\w+)/(select|delete)", path):
+            return self.servers_action(lambda: (SERVERS.select if m[2] == "select" else SERVERS.remove)(m[1]))
         else:
             return self.send_json({"ok": False, "error": "unbekannte Aktion"}, 404)
         self.send_json({"ok": ok, "error": err}, 200 if ok else 500)
 
+    def servers_action(self, fn):
+        """Auswahl, Hinzufuegen, Entfernen eines ComfyUI-Servers: die Liste danach zurueck."""
+        try:
+            added = fn()
+        except ValueError as e:
+            return self.send_json({"ok": False, "error": str(e)}, 400)
+        except OSError as e:
+            return self.send_json({"ok": False, "error": f"Einstellungen nicht speicherbar: {e}"}, 500)
+        out = {"ok": True, "error": "", "servers": SERVERS.list(), "active": SERVERS.active()["id"]}
+        if isinstance(added, dict):
+            out["added"] = added
+            out["reachable"] = try_json(added["url"] + "/system_stats", timeout=3) is not None
+        self.send_json(out)
+
     # Chats speichern und loeschen; sonst gibt es kein PUT und DELETE.
     def do_PUT(self):
-        if not chat.handle(self, OLLAMA):
+        if not chat.handle(self, OLLAMA, SERVERS.active()):
             self.send_error(405)
 
     do_DELETE = do_PUT

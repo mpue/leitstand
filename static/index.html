@@ -73,6 +73,13 @@
         <h2 id="comfy-title">ComfyUI</h2>
         <span class="status" data-status></span>
       </div>
+      <div class="server-pick" data-servers></div>
+      <form class="server-add" data-server-add hidden>
+        <input name="name" placeholder="Name, z. B. Werkstatt-PC" autocomplete="off">
+        <input name="url" placeholder="Adresse, z. B. 192.168.178.77:8188" required autocomplete="off">
+        <button type="submit" class="primary">Hinzufügen</button>
+        <button type="button" data-server-add-cancel>Abbrechen</button>
+      </form>
       <div class="meta" data-meta></div>
       <div class="actions" data-actions></div>
       <div class="log" data-log hidden><pre></pre></div>
