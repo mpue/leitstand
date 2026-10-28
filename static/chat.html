@@ -165,7 +165,17 @@ details.thinking summary { cursor: pointer; user-select: none; margin-bottom: 4p
 #input { border: 0; outline: none; resize: none; background: none; padding: 4px 6px; max-height: 240px; }
 #composer .row { display: flex; align-items: center; gap: 6px; }
 #composer .hint { color: var(--fg-soft); font-size: 12px; }
-#attachments { display: flex; flex-wrap: wrap; gap: 6px; }
+#attachments, #folders { display: flex; flex-wrap: wrap; gap: 6px; }
+#folders .chip { display: flex; align-items: center; gap: 2px; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-soft); font-size: 13px; }
+#folders .warn { align-self: center; color: var(--fg-soft); font-size: 12px; }
+#folder-path { display: flex; gap: 6px; margin-bottom: 8px; }
+#folder-path input { flex: 1; }
+#folder-list { list-style: none; margin: 0 0 12px; padding: 0; height: min(46vh, 420px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+#folder-list li { padding: 5px 10px; cursor: pointer; border-bottom: 1px solid var(--border); }
+#folder-list li:hover { background: var(--bg-soft); }
+#folder-list li.muted { cursor: default; background: none; }
+#folder-dialog .row { display: flex; gap: 8px; align-items: center; }
+#folder-dialog .row .muted { flex: 1; }
 #attachments .thumb { position: relative; }
 #attachments img { height: 64px; border-radius: 8px; display: block; }
 #attachments .thumb button { position: absolute; top: -6px; right: -6px; padding: 0 6px; border-radius: 10px; font-size: 11px; background: var(--bg-soft); }
@@ -295,10 +305,13 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
 
   <form id="composer">
     <div class="box">
+      <div id="folders" hidden></div>
       <div id="attachments" hidden></div>
       <textarea id="input" rows="1" placeholder="Nachricht…" autofocus></textarea>
       <div class="row">
         <button type="button" id="attach" class="ghost">＋ Datei</button>
+        <button type="button" id="share-folder" class="ghost"
+                title="Dem Chat einen Ordner auf diesem Rechner freigeben: das Modell darf darin lesen und suchen (braucht ein Modell mit Tools)">📁 Ordner</button>
         <button type="button" id="image-mode" class="ghost image-only" aria-pressed="false"
                 title="Die Nachricht als Bildbeschreibung direkt an ComfyUI schicken">🖼 Bild</button>
         <button type="button" id="video-mode" class="ghost video-only" aria-pressed="false"
@@ -311,6 +324,22 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
     </div>
   </form>
 </main>
+
+<dialog id="folder-dialog">
+  <form method="dialog" class="dialog-head">
+    <h3>Ordner freigeben</h3>
+    <button class="ghost" title="Schließen">✕</button>
+  </form>
+  <form id="folder-path">
+    <button type="button" id="folder-up" title="Übergeordneter Ordner">↑</button>
+    <input id="folder-input" spellcheck="false" aria-label="Pfad">
+  </form>
+  <ul id="folder-list"></ul>
+  <div class="row">
+    <span class="muted">Das Modell darf darin Dateien auflisten, lesen und durchsuchen, aber nichts ändern. Versteckte Dateien und Ordner (mit Punkt) bleiben außen vor.</span>
+    <button type="button" id="folder-share" class="primary">Freigeben</button>
+  </div>
+</dialog>
 
 <dialog id="models-dialog">
   <form method="dialog" class="dialog-head">
@@ -436,6 +465,48 @@ const VIDEO_TOOL = {type: 'function', function: {
     portrait: {type: 'boolean', description: 'true for an upright phone video (9:16), otherwise landscape 16:9'},
   }},
 }}
+
+// What the chat model may call to look into the folders shared with the chat
+// (folders.py on the server: read only, nothing hidden, nothing outside them).
+const FILE_TOOLS = [
+  {type: 'function', function: {
+    name: 'list_files',
+    description: 'Lists a folder the user shared with you: subfolders end in "/", files come with their size. ' +
+      'With pattern (e.g. "*.py" or "*rechnung*") it finds the matching files in that folder and all folders below it.',
+    parameters: {type: 'object', properties: {
+      path: {type: 'string', description: 'The folder as earlier results show it; empty for the shared folder itself'},
+      pattern: {type: 'string', description: 'Optional file name pattern with * and ?, searched in all subfolders'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'read_file',
+    description: 'Reads a file from a shared folder: text and code with line numbers, PDFs as text, pictures are shown to you. ' +
+      'Long files come in parts; the note says with which start_line to go on.',
+    parameters: {type: 'object', required: ['path'], properties: {
+      path: {type: 'string', description: 'The file as list_files or search_files show it'},
+      start_line: {type: 'integer', description: 'First line to read (default 1)'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'search_files',
+    description: 'Searches the text of all files in the shared folders (ignoring case) and returns file, line number and line of each match.',
+    parameters: {type: 'object', required: ['query'], properties: {
+      query: {type: 'string', description: 'The text to look for'},
+      path: {type: 'string', description: 'Optional: only in this subfolder or file'},
+    }},
+  }},
+]
+const FILE_TOOL_NAMES = new Set(FILE_TOOLS.map(t => t.function.name))
+
+const folderNote = folders =>
+  `Der Benutzer hat dir ${folders.length === 1 ? 'diesen Ordner' : 'diese Ordner'} auf seinem Rechner freigegeben (nur lesen):\n` +
+  folders.map(f => `- ${f}`).join('\n') + '\n' +
+  'Mit list_files siehst du, was darin liegt, mit read_file liest du eine Datei (auch PDFs und Bilder), mit ' +
+  'search_files findest du Textstellen. Geht es um diese Dateien, schau nach, statt zu raten:\n' +
+  '1. Finde die Stellen (search_files, list_files).\n' +
+  '2. Lies sie mit read_file -- ein Suchtreffer zeigt nur eine Zeile. Was eine Funktion tut, steht in ihrer ' +
+  'Definition (def, function, class …), nicht beim Aufruf: lies die Definition, start_line ein paar Zeilen davor.\n' +
+  '3. Erst dann antworten, und die Dateien (und Zeilen) nennen, auf die du dich stützt -- als `datei:zeile`, nicht als Link.'
 
 // ---------- Markdown ----------
 
@@ -676,6 +747,7 @@ async function selectModel(name) {
   const ctx = ctxKey && info.model_info[ctxKey]
   canSeeImages = has('vision')
   canUseTools = !!caps?.includes('tools')
+  renderFolders()
   $('#attach').disabled = !model
   $('#attach').title = `Text-, Code- und PDF-Dateien${canSeeImages ? ' oder Bilder' : ''} anhängen (auch per Einfügen oder Drag & Drop)`
   $('#think').disabled = !has('thinking')
@@ -844,6 +916,7 @@ const nearBottom = () => messagesBox.scrollHeight - messagesBox.scrollTop - mess
 function renderChat() {
   renderChatList()
   $('#system').value = chat.system || ''
+  renderFolders()
   document.title = chat.title ? `${chat.title} – Chat – Leitstand` : 'Chat – Leitstand'
   messagesBox.replaceChildren(...chat.messages.map(renderMessage))
   if (!chat.messages.length) messagesBox.append(emptyState())
@@ -911,9 +984,12 @@ function renderResearch(m) {
   const box = el('details', 'research')
   const steps = m.research || []
   if (!steps.length && !m.toolState) { box.hidden = true; return box }
-  const searches = steps.filter(s => s.kind === 'search').length, pages = steps.filter(s => s.kind === 'fetch').length
-  box.append(el('summary', '', m.toolState || ['Recherche', searches && `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}`,
-    pages && `${pages} ${pages === 1 ? 'Seite' : 'Seiten'} gelesen`].filter(Boolean).join(' · ')))
+  const count = kind => steps.filter(s => s.kind === kind).length
+  const searches = count('search'), pages = count('fetch'), dirs = count('dir'), files = count('file'), greps = count('grep')
+  box.append(el('summary', '', m.toolState || [searches || pages ? 'Recherche' : 'Dateien',
+    searches && `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}`, pages && `${pages} ${pages === 1 ? 'Seite' : 'Seiten'} gelesen`,
+    dirs && `${dirs} Ordner angesehen`, files && `${files} ${files === 1 ? 'Datei' : 'Dateien'} gelesen`,
+    greps && `${greps}× in Dateien gesucht`].filter(Boolean).join(' · ')))
   const ul = el('ul')
   for (const s of steps) {
     const li = el('li')
@@ -929,8 +1005,12 @@ function renderResearch(m) {
         }
         li.append(sub)
       }
-    } else {
+    } else if (s.kind === 'fetch') {
       li.append('📄 ', s.error ? `${s.url} – ${s.error}` : linkTo(s.url, s.title || s.url))
+    } else {
+      const icon = {dir: '📁 ', file: '📄 ', grep: '🔎 '}[s.kind]
+      li.append(icon, el('span', 'q', s.kind === 'grep' ? `„${s.query}“` : s.path + (s.pattern ? ` · ${s.pattern}` : '')),
+        s.error ? ` – ${s.error}` : s.kind === 'grep' ? ` – ${s.hits} Treffer` : '')
     }
     ul.append(li)
   }
@@ -1100,6 +1180,92 @@ async function research(name, args, msg, redraw, signal) {
   }
 }
 
+// With folders shared, a page the model reads could tell it to send their
+// files somewhere, as an address with the content in it. So fetch_page then
+// only takes addresses the user wrote or a search of this chat found.
+function knownUrl(c, url) {
+  const u = String(url || '').trim()
+  return !!u && c.messages.some(m => m.role === 'user' && m.content.includes(u) ||
+    (m.research || []).some(s => s.results?.some(r => r.url === u)))
+}
+
+// One look into a shared folder for the model, noted in `msg` for the reader:
+// [answer for the model, pictures for it].
+async function folderTool(name, args, roots, msg, redraw, signal) {
+  const what = {list_files: 'list', read_file: 'read', search_files: 'search'}[name]
+  const kind = {list: 'dir', read: 'file', search: 'grep'}[what]
+  msg.research ||= []
+  msg.toolState = what === 'read' ? `Liest ${args.path || ''}…` : what === 'search' ? `Sucht in den Dateien: „${args.query || ''}“…`
+    : `Schaut in ${args.path || 'den Ordner'}…`
+  redraw()
+  try {
+    const r = await json('files/' + what, {method: 'POST', signal, body: JSON.stringify({...args, roots})})
+    msg.research.push({kind, ...(what === 'search' ? {query: r.query, hits: r.count} : {path: r.folder || r.file}),
+      ...(args.pattern && {pattern: args.pattern})})
+    if (!r.image) return [r, []]
+    if (!canSeeImages) return [{file: r.file, size: r.size, error: 'Ein Bild: dieses Modell kann keine Bilder sehen'}, []]
+    return [{file: r.file, size: r.size, note: 'Das Bild hängt an dieser Nachricht'}, [await shrink(r.mime, r.image)]]
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    msg.research.push({kind, path: args.path || '', query: args.query, error: e.message})
+    return [{ok: false, error: e.message}, []]
+  } finally {
+    delete msg.toolState
+    redraw()
+  }
+}
+
+// A picture from a folder goes to the model with at most 1568 pixels a side,
+// as JPEG: a photo straight from the camera would fill the context and the
+// chat file. Ollama takes PNG and JPEG; the rest gets turned into JPEG too.
+// (createImageBitmap, not Image.decode: that one never settles while the tab isn't drawn.)
+async function shrink(mime, b64, max = 1568) {
+  const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {type: mime}))
+  const k = Math.min(1, max / Math.max(bitmap.width, bitmap.height))
+  if (k === 1 && b64.length < 1.5e6 && /^image\/(png|jpeg)$/.test(mime)) return `data:${mime};base64,${b64}`
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(bitmap.width * k)
+  canvas.height = Math.round(bitmap.height * k)
+  const g = canvas.getContext('2d')
+  g.fillStyle = '#fff'   // transparent parts, which JPEG doesn't have
+  g.fillRect(0, 0, canvas.width, canvas.height)
+  g.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  bitmap.close()
+  return canvas.toDataURL('image/jpeg', 0.88)
+}
+
+// ---------- Shared folders ----------
+
+let folderAt = ''   // the folder the dialog shows
+
+function renderFolders() {
+  const box = $('#folders'), list = chat?.folders || []
+  box.hidden = !list.length
+  box.replaceChildren(...list.map((f, i) => {
+    const d = el('div', 'chip', '📁 ' + f.split('/').pop())
+    d.title = `${f}\nDas Modell darf hier lesen und suchen`
+    d.append(action('✕', () => { chat.folders.splice(i, 1); renderFolders(); saveChat(chat) }))
+    return d
+  }))
+  if (list.length && !canUseTools) box.append(el('span', 'warn', 'Dieses Modell kann keine Werkzeuge und sieht den Ordner nicht'))
+}
+
+async function browseFolder(path) {
+  const r = await json('files/browse', {method: 'POST', body: JSON.stringify({path})})
+  folderAt = $('#folder-input').value = r.path
+  $('#folder-up').disabled = !r.parent
+  $('#folder-up').onclick = () => browseFolder(r.parent).catch(e => toast(e.message))
+  $('#folder-list').replaceChildren(...r.dirs.map(d => {
+    const li = el('li', '', '📁 ' + d)
+    li.onclick = () => browseFolder(`${r.path}/${d}`).catch(e => toast(e.message))
+    return li
+  }))
+  if (!r.dirs.length) $('#folder-list').append(el('li', 'muted', 'Keine Unterordner'))
+  $('#folder-list').scrollTop = 0
+  settings.lastFolder = r.path
+  saveSettings()
+}
+
 // ---------- Pictures and clips ----------
 
 const imageSettings = () => {
@@ -1231,7 +1397,8 @@ async function generate(round = 0) {
 
   const web = settings.webResearch && canUseTools && webAvailable
   const question = [...c.messages].reverse().find(m => m.role === 'user')?.content
-  const system = [c.system, web && researchNote(question)].filter(Boolean).join('\n\n')
+  const shared = canUseTools && c.folders?.length ? c.folders : null
+  const system = [c.system, web && researchNote(question), shared && folderNote(shared)].filter(Boolean).join('\n\n')
   const body = {
     model,
     messages: [...(system ? [{role: 'system', content: system}] : []), ...history.map(toOllama)],
@@ -1242,7 +1409,8 @@ async function generate(round = 0) {
   if (settings.num_ctx !== '') body.options.num_ctx = Number(settings.num_ctx)
   if (settings.think && !$('#think').disabled) body.think = {on: true, off: false}[settings.think] ?? settings.think
   const tools = [...(settings.imageTool && canUseTools && imageWorkflows.length ? [IMAGE_TOOL] : []),
-    ...(settings.videoTool && canUseTools && videoWorkflows.length ? [VIDEO_TOOL] : []), ...(web ? WEB_TOOLS : [])]
+    ...(settings.videoTool && canUseTools && videoWorkflows.length ? [VIDEO_TOOL] : []), ...(web ? WEB_TOOLS : []),
+    ...(shared ? FILE_TOOLS : [])]
   if (tools.length) body.tools = tools
 
   const ctrl = abort = new AbortController()
@@ -1304,7 +1472,7 @@ async function generate(round = 0) {
         const f = call.function || {}
         let args = f.arguments || {}
         if (typeof args === 'string') try { args = JSON.parse(args) } catch { args = {} }
-        let result
+        let result, images
         if (f.name === 'generate_image' && args.prompt) {
           result = await makeMedia('image', {prompt: args.prompt, ...(args.width && {width: args.width}), ...(args.height && {height: args.height})},
             msg, redraw, ctrl.signal)
@@ -1315,12 +1483,18 @@ async function generate(round = 0) {
           result = await makeMedia('video', {prompt: args.prompt,
             ...(Number(args.seconds) && {seconds: Number(args.seconds)}),
             ...(upright && {width: Math.min(w, h), height: Math.max(w, h)})}, msg, redraw, ctrl.signal)
+        } else if (f.name === 'fetch_page' && c.folders?.length && !knownUrl(c, args.url)) {
+          const error = 'Mit freigegebenen Ordnern liest fetch_page nur Adressen aus der Suche oder vom Benutzer'
+          ;(msg.research ||= []).push({kind: 'fetch', url: args.url || '', error})
+          result = {ok: false, error}
         } else if (f.name === 'web_search' || f.name === 'fetch_page') {
           result = await research(f.name, args, msg, redraw, ctrl.signal)
+        } else if (FILE_TOOL_NAMES.has(f.name) && c.folders?.length) {
+          [result, images] = await folderTool(f.name, args, c.folders, msg, redraw, ctrl.signal)
         } else {
           result = {ok: false, error: `Es gibt kein Werkzeug ${f.name} (oder es fehlen seine Angaben)`}
         }
-        c.messages.push({role: 'tool', toolName: f.name, content: JSON.stringify(result)})
+        c.messages.push({role: 'tool', toolName: f.name, content: JSON.stringify(result), ...(images?.length && {images})})
       }
       followUp = round < 8   // research takes a few rounds: search, read, read, answer
     }
@@ -1493,10 +1667,24 @@ composer.addEventListener('drop', e => {
   if (!$('#attach').disabled) addFiles([...e.dataTransfer.files])
 })
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && abort && !$('#models-dialog').open) abort.abort()
+  if (e.key === 'Escape' && abort && !$('dialog[open]')) abort.abort()
 })
 
 $('#attach').onclick = () => $('#file').click()
+$('#share-folder').onclick = () => {
+  $('#folder-dialog').showModal()
+  browseFolder(settings.lastFolder || '').catch(() => browseFolder('')).catch(e => toast(e.message))
+}
+$('#folder-path').onsubmit = e => {
+  e.preventDefault()
+  browseFolder($('#folder-input').value.trim()).catch(e => toast(e.message))
+}
+$('#folder-share').onclick = () => {
+  chat.folders = [...new Set([...(chat.folders || []), folderAt])]
+  $('#folder-dialog').close()
+  renderFolders()
+  saveChat(chat)
+}
 $('#image-mode').onclick = () => { setMode(mode === 'image' ? '' : 'image'); $('#input').focus() }
 $('#video-mode').onclick = () => { setMode(mode === 'video' ? '' : 'video'); $('#input').focus() }
 $('#file').onchange = e => { addFiles([...e.target.files]); e.target.value = '' }

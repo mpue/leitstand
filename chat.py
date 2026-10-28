@@ -21,6 +21,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import folders
 import imagegen
 import websearch
 
@@ -148,6 +149,8 @@ def handle(handler, ollama, comfy):
         reply_json(handler, {"available": websearch.available()})
     elif path in ("/chat/web/search", "/chat/web/fetch") and method == "POST":
         web(handler, path.rsplit("/", 1)[1])
+    elif path in ("/chat/files/browse", "/chat/files/list", "/chat/files/read", "/chat/files/search") and method == "POST":
+        files(handler, path.rsplit("/", 1)[1])
     elif (m := IMAGE_PATH.fullmatch(path)) and method == "GET":
         media(handler, IMAGES / m[1])
     elif (m := VENDOR_PATH.fullmatch(path)) and method == "GET":
@@ -268,6 +271,22 @@ def web(handler, what):
         return reply_json(handler, {"error": str(e)}, 400)
     except RuntimeError as e:
         return reply_json(handler, {"error": str(e)}, 502)
+    reply_json(handler, result)
+
+
+def files(handler, what):
+    """Die freigegebenen Ordner eines Chats (folders.py): die Auswahl und die Werkzeuge des Modells."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+        roots = req.get("roots")
+        result = (folders.browse(req.get("path")) if what == "browse"
+                  else folders.listing(roots, req.get("path"), req.get("pattern") or "") if what == "list"
+                  else folders.read(roots, req.get("path"), req.get("start_line") or 1) if what == "read"
+                  else folders.search(roots, req.get("query"), req.get("path")))
+    except ValueError as e:
+        return reply_json(handler, {"error": str(e)}, 400)
+    except OSError as e:
+        return reply_json(handler, {"error": f"Nicht lesbar: {e.strerror or e}"}, 400)
     reply_json(handler, result)
 
 
