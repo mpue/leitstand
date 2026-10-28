@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import chat
+
 HOST = os.environ.get("LEITSTAND_HOST", "0.0.0.0")
 PORT = int(os.environ.get("LEITSTAND_PORT", "8100"))
 OLLAMA = os.environ.get("LEITSTAND_OLLAMA", "http://127.0.0.1:11434")
@@ -346,6 +348,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if chat.handle(self, OLLAMA):   # /chat/: der Chat mit Ollama (chat.py)
+            return
         url = urlparse(self.path)
         if url.path in STATIC_FILES:
             name, ctype = STATIC_FILES[url.path]
@@ -376,6 +380,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
+        if chat.handle(self, OLLAMA):   # prueft den Header selbst, liest den Body selbst
+            return
         # Eigener Header erzwingt bei fremden Webseiten einen CORS-Preflight,
         # den wir nie beantworten: kein Start/Stopp per untergeschobenem Formular.
         if self.headers.get("X-Leitstand") != "1":
@@ -396,6 +402,13 @@ class Handler(BaseHTTPRequestHandler):
         else:
             return self.send_json({"ok": False, "error": "unbekannte Aktion"}, 404)
         self.send_json({"ok": ok, "error": err}, 200 if ok else 500)
+
+    # Chats speichern und loeschen; sonst gibt es kein PUT und DELETE.
+    def do_PUT(self):
+        if not chat.handle(self, OLLAMA):
+            self.send_error(405)
+
+    do_DELETE = do_PUT
 
 
 def main():
