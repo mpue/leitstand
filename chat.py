@@ -6,7 +6,8 @@ in static/chat.html, die Chats als eine JSON-Datei pro Chat in
 da. Der Server reicht /chat/api/* an Ollama weiter (streamend), speichert die
 Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder und Videos
 erzeugt ComfyUI (imagegen.py); sie liegen in der Ablage unter images/. Im Internet
-sucht und liest websearch.py (SearXNG).
+sucht und liest websearch.py (SearXNG). Dateien, die das Modell zum Herunterladen
+anlegt, liegen unter downloads/ (downloads.py).
 """
 
 import ipaddress
@@ -19,8 +20,10 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
+import comfytemplates
+import downloads
 import folders
 import imagegen
 import websearch
@@ -31,6 +34,8 @@ CHAT_ID = re.compile(r"[0-9a-f]{32}")
 CHAT_PATH = re.compile(r"/chat/chats/([0-9a-f]{32})")
 IMAGE_PATH = re.compile(r"/chat/images/(" + imagegen.MEDIA_NAME.pattern + ")")
 IMAGES = DATA / "images"
+DOWNLOADS = DATA / "downloads"
+DOWNLOAD_PATH = re.compile(r"/chat/downloads/([0-9a-f]{32})/([^/]+)")
 # KaTeX und highlight.js, je Version ein Verzeichnis: kein Teil beginnt mit einem Punkt
 VENDOR = PAGE.parent / "vendor"
 VENDOR_PATH = re.compile(r"/chat/vendor/((?:[\w-][\w.-]*/)*[\w-][\w.-]*\.(js|css|woff2))")
@@ -77,10 +82,13 @@ class ChatStore:
     def delete(self, chat_id):
         with self.lock:
             path = self.root / f"{chat_id}.json"
-            # Die Bilder und Videos, die ComfyUI fuer diesen Chat gemacht hat, gehen mit.
+            # Die Bilder und Videos, die ComfyUI fuer diesen Chat gemacht hat, und die
+            # Dateien, die das Modell angelegt hat, gehen mit.
             try:
-                for name in set(re.findall(r'"images/([0-9a-f]{32}\.(?:png|mp4))"', path.read_text("utf-8"))):
+                text = path.read_text("utf-8")
+                for name in set(re.findall(r'"images/([0-9a-f]{32}\.(?:png|mp4))"', text)):
                     (IMAGES / name).unlink(missing_ok=True)
+                downloads.remove(DOWNLOADS, set(re.findall(r'"downloads/([0-9a-f]{32})/', text)))
             except OSError:
                 pass
             path.unlink(missing_ok=True)
@@ -151,6 +159,12 @@ def handle(handler, ollama, comfy):
         web(handler, path.rsplit("/", 1)[1])
     elif path in ("/chat/files/browse", "/chat/files/list", "/chat/files/read", "/chat/files/search") and method == "POST":
         files(handler, path.rsplit("/", 1)[1])
+    elif path == "/chat/downloads" and method == "POST":
+        make_file(handler, comfy)
+    elif (m := DOWNLOAD_PATH.fullmatch(path)) and method == "GET":
+        download(handler, m[1], unquote(m[2]))
+    elif path in ("/chat/comfy/nodes", "/chat/comfy/templates") and method == "POST":
+        comfy_lookup(handler, comfy, path.rsplit("/", 1)[1])
     elif (m := IMAGE_PATH.fullmatch(path)) and method == "GET":
         media(handler, IMAGES / m[1])
     elif (m := VENDOR_PATH.fullmatch(path)) and method == "GET":
@@ -209,6 +223,52 @@ def image(handler, ollama, comfy):
         pass  # Stopp oder Seite zu
     finally:
         states.close()   # bricht den Auftrag in ComfyUI ab, falls er noch laeuft
+
+
+def make_file(handler, comfy):
+    """Eine Datei, die das Modell anlegt (create_file): {name, content}."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+        result = downloads.save(DOWNLOADS, req.get("name"), req.get("content"), comfy)
+    except ValueError as e:
+        return reply_json(handler, {"error": str(e)}, 400)
+    reply_json(handler, result)
+
+
+def download(handler, file_id, name):
+    """Immer als Anhang und in einer Sandbox: eine HTML-Datei des Modells laeuft
+    nicht im Ursprung des Leitstands."""
+    path = downloads.path_of(DOWNLOADS, file_id, name)
+    if path is None:
+        return reply_json(handler, {"error": "Datei nicht gefunden"}, 404)
+    data = path.read_bytes()
+    handler.send_response(200)
+    handler.send_header("Content-Type", downloads.content_type(name))
+    handler.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
+    handler.send_header("Content-Security-Policy", "sandbox")
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("Cache-Control", "private, max-age=86400")   # die id ist eindeutig
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def comfy_lookup(handler, comfy, what):
+    """Fuer die Werkzeuge comfy_nodes und comfy_templates: Knoten des ComfyUI-Servers
+    beschreiben, seine Vorlagen suchen oder eine im API-Format holen."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+        if what == "nodes":
+            result = downloads.nodes(DOWNLOADS, comfy, req.get("search"), req.get("names"))
+        elif req.get("name"):
+            result = comfytemplates.get(DOWNLOADS, comfy, req["name"])
+        else:
+            result = comfytemplates.search(comfy, req.get("search"))
+    except ValueError as e:
+        return reply_json(handler, {"error": str(e)}, 400)
+    except RuntimeError as e:
+        return reply_json(handler, {"error": str(e)}, 502)
+    reply_json(handler, result)
 
 
 def vendor(handler, path, ctype):

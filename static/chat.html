@@ -104,6 +104,25 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 .research li { margin: 2px 0; }
 .research a { color: inherit; }
 .research .q { color: var(--fg); }
+/* Files the model made (create_file): a card each, with download and a look inside */
+.downloads { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
+.download { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--bg-side); }
+.download.replaced { opacity: .6; }
+.download .dl-head { display: flex; align-items: center; gap: 10px; }
+.download .dl-icon { font-size: 20px; line-height: 1; }
+.download .dl-text { flex: 1; min-width: 0; }
+.download .dl-name { font-weight: 600; overflow-wrap: anywhere; color: var(--fg); text-decoration: none; }
+.download .dl-name:hover { text-decoration: underline; }
+.download .dl-meta { color: var(--fg-soft); font-size: 12px; }
+.download a.dl-get { flex: none; background: var(--accent); color: #fff; border-radius: 8px; padding: 4px 12px; font-size: 13px; text-decoration: none; }
+.download .dl-check { margin: 6px 0 0; font-size: 13px; color: var(--fg-soft); }
+.download .dl-check.bad { color: var(--fg); }
+.download .dl-check ul { margin: 4px 0 0; padding-left: 18px; }
+.download .dl-check li { margin: 2px 0; overflow-wrap: anywhere; }
+.download details.dl-view { margin-top: 6px; font-size: 13px; color: var(--fg-soft); }
+.download details.dl-view summary { cursor: pointer; }
+.download details.dl-view .code { margin: 6px 0 0; }
+.download details.dl-view pre { max-height: 360px; }
 #image-mode[aria-pressed="true"], #video-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #settings .group { grid-column: 1 / -1; margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--fg-soft); text-transform: uppercase; letter-spacing: .05em; }
 #settings label.check { flex-direction: row; align-items: center; gap: 6px; }
@@ -299,6 +318,10 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
     <label class="web-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Gesucht wird über das eigene SearXNG (searxng.sh).">
       <input id="webResearch" type="checkbox"> Das Chat-Modell darf im Internet suchen und Seiten lesen
     </label>
+    <div class="group">Dateien</div>
+    <label class="check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. ComfyUI-Workflows prüft der Leitstand gegen den gewählten ComfyUI-Server.">
+      <input id="fileTool" type="checkbox"> Das Chat-Modell darf Dateien zum Herunterladen anlegen (ComfyUI-Workflows, Skripte, Tabellen …)
+    </label>
   </section>
 
   <div id="messages"></div>
@@ -372,7 +395,7 @@ const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1) + ' GB'
 let settings = {model: '', temperature: '', num_ctx: '', think: '', system: '',
   imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true,
   videoWorkflow: '', videoSize: '1344x768', videoSeconds: '5', videoTool: true,
-  webResearch: true}
+  webResearch: true, fileTool: true}
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ollama-chat') || '{}')) } catch {}
 const saveSettings = () => localStorage.setItem('ollama-chat', JSON.stringify(settings))
 
@@ -498,6 +521,54 @@ const FILE_TOOLS = [
 ]
 const FILE_TOOL_NAMES = new Set(FILE_TOOLS.map(t => t.function.name))
 
+// What the chat model may call to hand the user a file, and to look up the
+// nodes of ComfyUI for workflows (downloads.py on the server checks them).
+const MAKE_TOOLS = [
+  {type: 'function', function: {
+    name: 'create_file',
+    description: 'Creates a file the user can download from the chat: a ComfyUI workflow (.json), a script, a config, ' +
+      'a table (.csv), notes (.md) … Use it whenever the user wants a file, instead of only writing the content into the chat. ' +
+      'JSON must be valid. A ComfyUI workflow is checked against the user\'s ComfyUI server: if the result lists problems, ' +
+      'fix them and create the file again under the same name.',
+    parameters: {type: 'object', required: ['name', 'content'], properties: {
+      name: {type: 'string', description: 'File name with extension, e.g. "z-image-portrait.json"'},
+      content: {type: 'string', description: 'The complete content of the file'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'comfy_nodes',
+    description: 'Looks up the nodes of the user\'s ComfyUI server, to write workflows that run there. search finds node ' +
+      'types by words in their name or category; names returns the exact inputs (type, allowed values such as the model ' +
+      'files and samplers there, defaults) and outputs of the given node types.',
+    parameters: {type: 'object', properties: {
+      search: {type: 'string', description: 'Words to look for, e.g. "loader" or "upscale"'},
+      names: {type: 'array', items: {type: 'string'}, description: 'Exact node types, e.g. ["KSampler", "UNETLoader"]'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'comfy_templates',
+    description: 'The official workflow templates of the user\'s ComfyUI, which are known to work. search finds templates by ' +
+      'words (model, task: "z-image", "flux upscale", "wan image to video"); name returns one as a ready API-format workflow ' +
+      'to adapt (prompt, size, steps, seed …) and save with create_file, plus the model files the server lacks for it.',
+    parameters: {type: 'object', properties: {
+      search: {type: 'string', description: 'Words to look for'},
+      name: {type: 'string', description: 'The exact template name from a search, e.g. "image_z_image_turbo"'},
+    }},
+  }},
+]
+const MAKE_TOOL_NAMES = new Set(MAKE_TOOLS.map(t => t.function.name))
+
+const fileNote =
+  'Mit create_file legst du Dateien an, die der Benutzer im Chat herunterladen kann. Will er eine Datei (einen ' +
+  'ComfyUI-Workflow, ein Skript, eine Konfiguration, eine Tabelle …), dann lege sie damit an, statt den Inhalt nur in ' +
+  'den Chat zu schreiben, und sag danach kurz, was drin ist. ComfyUI-Workflows schreibst du im API-Format: ' +
+  '{"1": {"class_type": "…", "inputs": {…}}, …}, eine Verbindung ist ["<Knoten-id>", <Ausgang>]. Erfinde einen ' +
+  'Workflow nicht neu: such mit comfy_templates die passende offizielle Vorlage, hol sie mit name und ändere nur, was der ' +
+  'Benutzer will (Prompt, Größe, Schritte …). Gibt es keine, schlag Knoten und Eingänge mit comfy_nodes nach, statt sie zu ' +
+  'raten -- dort stehen auch die vorhandenen Modelldateien. ' +
+  'create_file prüft den Workflow gegen den ComfyUI-Server; meldet es Probleme, behebe sie und lege die Datei unter ' +
+  'demselben Namen neu an.'
+
 const folderNote = folders =>
   `Der Benutzer hat dir ${folders.length === 1 ? 'diesen Ordner' : 'diese Ordner'} auf seinem Rechner freigegeben (nur lesen):\n` +
   folders.map(f => `- ${f}`).join('\n') + '\n' +
@@ -576,8 +647,9 @@ function codeBlock(code, lang) {
   const body = known
     ? cached(`C${lang}\n${code}`, () => hljs.highlight(code, {language: lang, ignoreIllegals: true}).value)
     : esc(code)
-  return `<div class="code"><div class="code-head"><span>${esc(lang || 'code')}</span>` +
-    `<button type="button" class="ghost copy-code">Kopieren</button></div><pre><code>${body}</code></pre></div>`
+  return `<div class="code" data-lang="${esc(lang || '')}"><div class="code-head"><span>${esc(lang || 'code')}</span>` +
+    `<span><button type="button" class="ghost save-code">Herunterladen</button>` +
+    `<button type="button" class="ghost copy-code">Kopieren</button></span></div><pre><code>${body}</code></pre></div>`
 }
 
 function list(lines, i) {
@@ -897,6 +969,7 @@ function exportChat() {
   const md = `# ${chat.title}\n\n` + chat.messages.filter(m => m.role !== 'tool').map(m =>
     `**${m.role === 'user' ? 'Du' : m.model || 'Assistent'}:**\n\n${toOllama(m).content}` +
     (m.generated || []).map(g => `\n\n${g.kind === 'video' ? '🎬 [Video: ' : '!['}${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('') +
+    (m.downloads || []).map(d => `\n\n📎 [${d.name.replace(/[\[\]]/g, '')}](${new URL(d.url, location.href)})`).join('') +
     ((m.research || []).filter(s => s.kind === 'fetch' && !s.error).length
       ? '\n\nGelesen: ' + m.research.filter(s => s.kind === 'fetch' && !s.error).map(s => `[${(s.title || s.url).replace(/[\[\]]/g, '')}](${s.url})`).join(', ')
       : '')
@@ -971,7 +1044,7 @@ function renderMessage(m, i) {
   } else {
     const think = el('details', 'thinking')
     think.append(el('summary'), el('div', 'md'))
-    bubble.append(think, renderResearch(m), el('div', 'md content'), renderGenerated(m), el('div', 'error'))
+    bubble.append(think, renderResearch(m), el('div', 'md content'), renderGenerated(m), renderDownloads(m, i), el('div', 'error'))
     meta.append(el('span', 'stats'), action('Kopieren', b => copy(splitThink(m.content)[1], b)))
     if (i === chat.messages.length - 1) meta.append(action('Neu generieren', regenerate))
   }
@@ -986,10 +1059,12 @@ function renderResearch(m) {
   if (!steps.length && !m.toolState) { box.hidden = true; return box }
   const count = kind => steps.filter(s => s.kind === kind).length
   const searches = count('search'), pages = count('fetch'), dirs = count('dir'), files = count('file'), greps = count('grep')
-  box.append(el('summary', '', m.toolState || [searches || pages ? 'Recherche' : 'Dateien',
+  const nodes = count('nodes'), templates = count('template'), failed = count('make')
+  box.append(el('summary', '', m.toolState || [searches || pages ? 'Recherche' : dirs || files || greps ? 'Dateien' : 'Werkzeuge',
     searches && `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}`, pages && `${pages} ${pages === 1 ? 'Seite' : 'Seiten'} gelesen`,
     dirs && `${dirs} Ordner angesehen`, files && `${files} ${files === 1 ? 'Datei' : 'Dateien'} gelesen`,
-    greps && `${greps}× in Dateien gesucht`].filter(Boolean).join(' · ')))
+    greps && `${greps}× in Dateien gesucht`, templates && `${templates}× ComfyUI-Vorlagen`, nodes && `${nodes}× ComfyUI-Knoten nachgeschlagen`,
+    failed && `${failed} ${failed === 1 ? 'Datei' : 'Dateien'} abgelehnt`].filter(Boolean).join(' · ')))
   const ul = el('ul')
   for (const s of steps) {
     const li = el('li')
@@ -1007,6 +1082,14 @@ function renderResearch(m) {
       }
     } else if (s.kind === 'fetch') {
       li.append('📄 ', s.error ? `${s.url} – ${s.error}` : linkTo(s.url, s.title || s.url))
+    } else if (s.kind === 'nodes') {
+      li.append('🧩 ', el('span', 'q', s.names?.length ? s.names.join(', ') : `„${s.query}“`),
+        s.error ? ` – ${s.error}` : s.names?.length ? '' : ` – ${s.hits ?? 0} Treffer`)
+    } else if (s.kind === 'template') {
+      li.append('📋 ', el('span', 'q', s.name || `„${s.query}“`),
+        s.error ? ` – ${s.error}` : s.name ? ' – als Workflow geholt' : ` – ${s.hits ?? 0} Vorlagen`)
+    } else if (s.kind === 'make') {
+      li.append('💾 ', el('span', 'q', s.path), ` – nicht angelegt: ${s.error}`)
     } else {
       const icon = {dir: '📁 ', file: '📄 ', grep: '🔎 '}[s.kind]
       li.append(icon, el('span', 'q', s.kind === 'grep' ? `„${s.query}“` : s.path + (s.pattern ? ` · ${s.pattern}` : '')),
@@ -1077,7 +1160,7 @@ function updateAssistant(wrap, m, streaming) {
     think.querySelector('summary').textContent = streaming && !content ? 'Denkt nach…' : 'Gedankengang'
     think.querySelector('.md').innerHTML = markdown(thinking)
   }
-  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.toolState || m.generated?.length
+  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.toolState || m.generated?.length || m.downloads?.length
     ? markdown(content) : '<span class="typing"></span>'
   wrap.querySelector('.error').textContent = m.error || ''
   wrap.querySelector('.stats').textContent = stats(m)
@@ -1232,6 +1315,152 @@ async function shrink(mime, b64, max = 1568) {
   g.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
   bitmap.close()
   return canvas.toDataURL('image/jpeg', 0.88)
+}
+
+// ---------- Files for the user ----------
+
+// A file the model made: on the server (downloads.py), as a card in `msg`.
+// The answer tells the model whether a ComfyUI workflow fits the server.
+async function makeFile(args, msg, redraw, signal) {
+  const name = String(args.name || '')
+  // Models sometimes hand over a JSON file as an object instead of as text.
+  const content = typeof args.content === 'string' ? args.content : JSON.stringify(args.content ?? '', null, 2)
+  msg.toolState = `Legt ${name || 'eine Datei'} an…`
+  redraw()
+  try {
+    const r = await json('downloads', {method: 'POST', signal, body: JSON.stringify({name, content})})
+    ;(msg.downloads ||= []).push({id: r.id, name: r.name, url: r.url, size: r.size, ...(r.comfyui && {comfyui: r.comfyui})})
+    const w = r.comfyui
+    return {ok: true, name: r.name, size: r.size, note: 'Die Datei liegt im Chat zum Herunterladen bereit',
+      ...(w && {comfyui: !w.checked ? {note: w.note}
+        : w.problems.length ? {problems: w.problems, ...(w.more && {more: w.more}),
+          todo: 'So würde ComfyUI den Workflow nicht ausführen: beheben und unter demselben Namen neu anlegen'}
+        : {ok: `Der Workflow passt zu den Knoten von ${w.server}`, ...(w.note && {note: w.note})}})}
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    ;(msg.research ||= []).push({kind: 'make', path: name, error: e.message})
+    return {ok: false, error: e.message}
+  } finally {
+    delete msg.toolState
+    redraw()
+  }
+}
+
+// Node types of the chosen ComfyUI server, for the model to write workflows with.
+async function lookupNodes(args, msg, redraw, signal) {
+  let names = args.names
+  if (typeof names === 'string') try { names = JSON.parse(names) } catch { names = names.split(/[\s,]+/) }
+  names = (Array.isArray(names) ? names : []).map(String).filter(Boolean)
+  const search = Array.isArray(args.search) ? args.search.join(' ') : String(args.search || '')
+  msg.research ||= []
+  msg.toolState = names.length ? `Schlägt ComfyUI-Knoten nach: ${names.join(', ')}…` : `Sucht ComfyUI-Knoten: „${search}“…`
+  redraw()
+  try {
+    const r = await json('comfy/nodes', {method: 'POST', signal, body: JSON.stringify({search, names})})
+    msg.research.push({kind: 'nodes', query: search, names, hits: r.count})
+    return r
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    msg.research.push({kind: 'nodes', query: search, names, error: e.message})
+    return {ok: false, error: e.message}
+  } finally {
+    delete msg.toolState
+    redraw()
+  }
+}
+
+const kb = n => n < 1024 ? `${n} Byte` : n < 1048576 ? `${(n / 1024).toLocaleString('de-DE', {maximumFractionDigits: 1})} KB`
+  : `${(n / 1048576).toLocaleString('de-DE', {maximumFractionDigits: 1})} MB`
+
+function renderDownloads(m, i) {
+  const box = el('div', 'downloads')
+  for (const d of m.downloads || []) {
+    const w = d.comfyui
+    // the model fixed a workflow and made it again: this one is the old one
+    const replaced = chat.messages.slice(i + 1).some(o => o.downloads?.some(x => x.name === d.name))
+    const card = el('div', 'download' + (replaced ? ' replaced' : ''))
+    const head = el('div', 'dl-head'), text = el('div', 'dl-text')
+    const name = Object.assign(el('a', 'dl-name', d.name), {href: d.url, download: d.name})
+    text.append(name, el('div', 'dl-meta', [w ? `ComfyUI-Workflow (${w.format}) · ${w.nodes} Knoten` : '', kb(d.size),
+      replaced && 'durch eine neuere Fassung ersetzt'].filter(Boolean).join(' · ')))
+    head.append(el('span', 'dl-icon', w ? '🧩' : '📄'), text, Object.assign(el('a', 'dl-get', 'Herunterladen'), {href: d.url, download: d.name}))
+    card.append(head)
+    if (w) {
+      const bad = w.checked && w.problems.length
+      const check = el('div', 'dl-check' + (bad ? ' bad' : ''),
+        !w.checked ? w.note : bad ? `⚠ ${w.problems.length + (w.more || 0)} ${w.problems.length + (w.more || 0) === 1 ? 'Problem' : 'Probleme'} auf ${w.server}:`
+          : `✓ passt zu den Knoten von ${w.server}${w.note ? ` (${w.note.replace(/^Geprüft gegen die /, '')})` : ''}`)
+      if (bad) {
+        const ul = el('ul')
+        for (const p of w.problems) ul.append(el('li', '', p))
+        if (w.more) ul.append(el('li', '', `… und ${w.more} weitere`))
+        check.append(ul)
+      }
+      card.append(check)
+    }
+    const view = el('details', 'dl-view')
+    view.append(el('summary', '', 'Inhalt ansehen'))
+    view.ontoggle = async () => {
+      if (!view.open || view.dataset.loaded) return
+      view.dataset.loaded = '1'
+      try {
+        const res = await fetch(d.url)
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+        const body = await res.text()
+        const shown = body.length > 200000 ? body.slice(0, 200000) + '\n…' : body
+        view.insertAdjacentHTML('beforeend', `<div class="md">${codeBlock(shown, langOf(d.name))}</div>`)
+        view.querySelector('.code').dataset.name = d.name   // its download keeps the file's name
+      } catch (e) {
+        view.append(el('div', 'error', `Nicht lesbar: ${e.message}`))
+      }
+    }
+    card.append(view)
+    box.append(card)
+  }
+  box.hidden = !box.childElementCount
+  return box
+}
+
+// File endings for code blocks and the other way round
+const EXT = {python: 'py', py: 'py', javascript: 'js', js: 'js', typescript: 'ts', ts: 'ts', json: 'json', bash: 'sh',
+  sh: 'sh', shell: 'sh', zsh: 'sh', html: 'html', xml: 'xml', css: 'css', yaml: 'yaml', yml: 'yaml', toml: 'toml',
+  ini: 'ini', markdown: 'md', md: 'md', csv: 'csv', sql: 'sql', c: 'c', cpp: 'cpp', 'c++': 'cpp', h: 'h', hpp: 'hpp',
+  java: 'java', kotlin: 'kt', rust: 'rs', go: 'go', ruby: 'rb', php: 'php', lua: 'lua', glsl: 'glsl', hlsl: 'hlsl',
+  cmake: 'cmake', powershell: 'ps1', diff: 'diff', svg: 'svg', tex: 'tex', latex: 'tex', text: 'txt', txt: 'txt'}
+const langOf = name => {
+  const ext = name.toLowerCase().split('.').pop()
+  return Object.keys(EXT).find(k => EXT[k] === ext && window.hljs?.getLanguage(k)) || ''
+}
+
+// A code block from an answer as a file: named after the chat, ending after its language.
+function saveCode(block) {
+  const lang = (block.dataset.lang || '').toLowerCase()
+  const stem = (chat?.title || '').replace(/^[🖼🎬]\s*/u, '').toLowerCase().replace(/[^\wäöüß]+/g, '-').slice(0, 40).replace(/^-+|-+$/g, '') || 'code'
+  const name = block.dataset.name || (lang === 'dockerfile' ? 'Dockerfile' : lang === 'makefile' ? 'Makefile' : `${stem}.${EXT[lang] || 'txt'}`)
+  const a = Object.assign(el('a'), {href: URL.createObjectURL(new Blob([block.querySelector('code').textContent], {type: 'text/plain'})), download: name})
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+
+// The official templates of the chosen ComfyUI server: found by words, or one as an API workflow.
+async function lookupTemplates(args, msg, redraw, signal) {
+  const search = Array.isArray(args.search) ? args.search.join(' ') : String(args.search || '')
+  const name = String(args.name || '')
+  msg.research ||= []
+  msg.toolState = name ? `Holt die ComfyUI-Vorlage ${name}…` : `Sucht ComfyUI-Vorlagen: „${search}“…`
+  redraw()
+  try {
+    const r = await json('comfy/templates', {method: 'POST', signal, body: JSON.stringify(name ? {name} : {search})})
+    msg.research.push({kind: 'template', query: search, name, hits: r.count})
+    return r
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    msg.research.push({kind: 'template', query: search, name, error: e.message})
+    return {ok: false, error: e.message}
+  } finally {
+    delete msg.toolState
+    redraw()
+  }
 }
 
 // ---------- Shared folders ----------
@@ -1418,7 +1647,8 @@ async function generate(round = 0) {
   const web = settings.webResearch && canUseTools && webAvailable
   const question = [...c.messages].reverse().find(m => m.role === 'user')?.content
   const shared = canUseTools && c.folders?.length ? c.folders : null
-  const system = [c.system, web && researchNote(question), shared && folderNote(shared)].filter(Boolean).join('\n\n')
+  const making = settings.fileTool && canUseTools
+  const system = [c.system, web && researchNote(question), shared && folderNote(shared), making && fileNote].filter(Boolean).join('\n\n')
   const body = {
     model,
     messages: [...(system ? [{role: 'system', content: system}] : []), ...history.map(toOllama)],
@@ -1430,7 +1660,7 @@ async function generate(round = 0) {
   if (settings.think && !$('#think').disabled) body.think = {on: true, off: false}[settings.think] ?? settings.think
   const tools = [...(settings.imageTool && canUseTools && imageWorkflows.length ? [IMAGE_TOOL] : []),
     ...(settings.videoTool && canUseTools && videoWorkflows.length ? [VIDEO_TOOL] : []), ...(web ? WEB_TOOLS : []),
-    ...(shared ? FILE_TOOLS : [])]
+    ...(shared ? FILE_TOOLS : []), ...(making ? MAKE_TOOLS : [])]
   if (tools.length) body.tools = tools
 
   const ctrl = abort = new AbortController()
@@ -1527,6 +1757,12 @@ async function generate(round = 0) {
           result = await research(f.name, args, msg, redraw, ctrl.signal)
         } else if (FILE_TOOL_NAMES.has(f.name) && c.folders?.length) {
           [result, images] = await folderTool(f.name, args, c.folders, msg, redraw, ctrl.signal)
+        } else if (f.name === 'create_file' && making) {
+          result = await makeFile(args, msg, redraw, ctrl.signal)
+        } else if (f.name === 'comfy_nodes' && making) {
+          result = await lookupNodes(args, msg, redraw, ctrl.signal)
+        } else if (f.name === 'comfy_templates' && making) {
+          result = await lookupTemplates(args, msg, redraw, ctrl.signal)
         } else {
           result = {ok: false, error: `Es gibt kein Werkzeug ${f.name} (oder es fehlen seine Angaben)`}
         }
@@ -1742,6 +1978,8 @@ $('#pull-form').onsubmit = e => {
 messagesBox.addEventListener('click', e => {
   const b = e.target.closest('.copy-code')
   if (b) copy(b.closest('.code').querySelector('code').textContent, b)
+  const s = e.target.closest('.save-code')
+  if (s) saveCode(s.closest('.code'))
 })
 
 for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize', 'imageSteps', 'imageSeed',
@@ -1750,7 +1988,7 @@ for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize
   input.value = settings[id]
   input.onchange = () => { settings[id] = input.value; saveSettings() }
 }
-for (const id of ['imageShare', 'imageTool', 'videoTool', 'webResearch']) {
+for (const id of ['imageShare', 'imageTool', 'videoTool', 'webResearch', 'fileTool']) {
   const input = $('#' + id)
   input.checked = settings[id]
   input.onchange = () => { settings[id] = input.checked; saveSettings() }
