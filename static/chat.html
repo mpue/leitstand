@@ -26,6 +26,7 @@
   --hl-keyword: #cf222e; --hl-title: #8250df; --hl-constant: #0550ae; --hl-string: #0a3069; --hl-builtin: #953800;
   --hl-comment: #6e7781; --hl-tag: #116329; --hl-bullet: #6c4f00;
   --hl-add: #116329; --hl-add-bg: #dafbe1; --hl-del: #82071e; --hl-del-bg: #ffebe9;
+  --up: #1baf7a; --down: #e34948; --sma1: #2a78d6; --sma2: #eda100;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -36,6 +37,7 @@
     --hl-keyword: #ff7b72; --hl-title: #d2a8ff; --hl-constant: #79c0ff; --hl-string: #a5d6ff; --hl-builtin: #ffa657;
     --hl-comment: #8b949e; --hl-tag: #7ee787; --hl-bullet: #f2cc60;
     --hl-add: #aff5b4; --hl-add-bg: #033a16; --hl-del: #ffdcd7; --hl-del-bg: #67060c;
+    --up: #199e70; --down: #e66767; --sma1: #3987e5; --sma2: #c98500;
   }
 }
 * { box-sizing: border-box; }
@@ -125,7 +127,43 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 .download details.dl-view summary { cursor: pointer; }
 .download details.dl-view .code { margin: 6px 0 0; }
 .download details.dl-view pre { max-height: 360px; }
-#image-mode[aria-pressed="true"], #video-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Stock market: a table of quotes, a candlestick chart per security */
+.markets { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 8px; }
+.market { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 8px; background: var(--bg-side); }
+.market.busy { opacity: .6; transition: opacity .2s; }
+.mk-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 16px; }
+.mk-name { font-weight: 600; }
+.mk-sub { color: var(--fg-soft); font-size: 12px; }
+.mk-price { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mk-price small { font-size: 13px; font-weight: 500; color: var(--fg-soft); margin-left: 3px; }
+.mk-change { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+.mk-change.up { color: var(--up); } .mk-change.down { color: var(--down); } .mk-change.flat { color: var(--fg-soft); }
+.mk-meta { color: var(--fg-soft); font-size: 12px; margin-top: 2px; }
+.mk-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin: 8px 0 4px; }
+.mk-controls button { padding: 2px 8px; font-size: 12px; }
+.mk-controls button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.mk-controls .spacer { flex: 1; }
+.mk-controls i { display: inline-block; width: 10px; height: 2px; border-radius: 1px; vertical-align: middle; margin: 0 3px 0 2px; }
+.mk-plot { position: relative; height: 302px; touch-action: pan-y; }
+.mk-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.mk-plot .grid { stroke: var(--border); stroke-width: 1; }
+.mk-plot .tick { fill: var(--fg-soft); font-size: 11px; font-variant-numeric: tabular-nums; }
+.mk-plot .cross { stroke: var(--fg-soft); stroke-width: 1; stroke-dasharray: 3 3; }
+.mk-tip { position: absolute; top: 4px; pointer-events: none; background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 16px rgba(0,0,0,.18); font-variant-numeric: tabular-nums; z-index: 2; }
+.mk-tip .t { color: var(--fg-soft); margin-bottom: 2px; }
+.mk-tip b { font-weight: 600; }
+.quotes { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.quotes td { padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.quotes td:first-child { white-space: normal; padding-left: 0; }
+.quotes td.num { text-align: right; }
+.quotes tr:last-child td { border-bottom: none; }
+.quotes .err { color: var(--danger); white-space: normal; }
+@media (max-width: 560px) {
+  .quotes .rng, .mk-change .abs { display: none; }
+  .quotes td { padding: 5px 4px; }
+}
+#image-mode[aria-pressed="true"], #video-mode[aria-pressed="true"], #market-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #settings .group { grid-column: 1 / -1; margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--fg-soft); text-transform: uppercase; letter-spacing: .05em; }
 #settings label.check { flex-direction: row; align-items: center; gap: 6px; }
 .error { color: var(--danger); font-size: 14px; }
@@ -184,8 +222,9 @@ details.thinking summary { cursor: pointer; user-select: none; margin-bottom: 4p
 #composer .box:focus-within { border-color: var(--fg-soft); }
 #composer.drag .box { border-color: var(--accent); border-style: dashed; }
 #input { border: 0; outline: none; resize: none; background: none; padding: 4px 6px; max-height: 240px; }
-#composer .row { display: flex; align-items: center; gap: 6px; }
-#composer .hint { color: var(--fg-soft); font-size: 12px; }
+#composer .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#composer .row > button { flex: none; white-space: nowrap; }
+#composer .hint { color: var(--fg-soft); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #attachments, #folders { display: flex; flex-wrap: wrap; gap: 6px; }
 #folders .chip { display: flex; align-items: center; gap: 2px; padding: 2px 2px 2px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-soft); font-size: 13px; }
 #folders .warn { align-self: center; color: var(--fg-soft); font-size: 12px; }
@@ -320,6 +359,10 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
     <label class="web-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Gesucht wird über das eigene SearXNG (searxng.sh).">
       <input id="webResearch" type="checkbox"> Das Chat-Modell darf im Internet suchen und Seiten lesen
     </label>
+    <div class="group">Börse</div>
+    <label class="check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Die Kurse kommen von Yahoo Finance, je nach Börse bis 15 Minuten verzögert.">
+      <input id="marketTool" type="checkbox"> Das Chat-Modell darf Kurse abfragen und Kerzencharts zeigen
+    </label>
     <div class="group">Dateien</div>
     <label class="check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. ComfyUI-Workflows prüft der Leitstand gegen den gewählten ComfyUI-Server.">
       <input id="fileTool" type="checkbox"> Das Chat-Modell darf Dateien zum Herunterladen anlegen (ComfyUI-Workflows, Skripte, Tabellen …)
@@ -341,6 +384,8 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
                 title="Die Nachricht als Bildbeschreibung direkt an ComfyUI schicken">🖼 Bild</button>
         <button type="button" id="video-mode" class="ghost video-only" aria-pressed="false"
                 title="Die Nachricht als Videobeschreibung direkt an ComfyUI schicken (mit Ton)">🎬 Video</button>
+        <button type="button" id="market-mode" class="ghost" aria-pressed="false"
+                title="Kurse und Kerzencharts sofort, ohne Sprachmodell: z. B. „Siemens“, „SAP, DAX“ oder „Nvidia 1j“ (geht auch als /kurs …)">📈 Kurs</button>
         <input type="file" id="file" multiple hidden>
         <span class="spacer"></span>
         <span class="hint">Enter senden · Shift+Enter neue Zeile · Esc stoppt</span>
@@ -397,7 +442,7 @@ const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1) + ' GB'
 let settings = {model: '', temperature: '', num_ctx: '', think: '', system: '',
   imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true,
   videoWorkflow: '', videoSize: '1344x768', videoSeconds: '5', videoTool: true,
-  webResearch: true, fileTool: true}
+  webResearch: true, fileTool: true, marketTool: true}
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ollama-chat') || '{}')) } catch {}
 const saveSettings = () => localStorage.setItem('ollama-chat', JSON.stringify(settings))
 
@@ -598,6 +643,47 @@ const MAKE_TOOLS = [
   }},
 ]
 const MAKE_TOOL_NAMES = new Set(MAKE_TOOLS.map(t => t.function.name))
+
+// What the chat model may call for stock market numbers (markets.py: Yahoo Finance).
+const MARKET_TOOLS = [
+  {type: 'function', function: {
+    name: 'stock_quote',
+    description: 'Current prices of shares, indices, crypto or currencies (Yahoo Finance): price, change to the previous ' +
+      'close, day range, volume and the time of the data. Shows them to the user as a table. Use it for any question ' +
+      'about a current price -- never quote prices from memory.',
+    parameters: {type: 'object', required: ['symbols'], properties: {
+      symbols: {type: 'array', items: {type: 'string'}, description: 'Symbols or names, e.g. ["SAP.DE", "^GDAXI", "Nvidia"]'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'stock_chart',
+    description: 'Shows the user a candlestick chart of a share, index, crypto or currency and returns its key figures ' +
+      'for the period (change, high, low, moving averages 20/50/200, RSI 14, volatility) and the last candles. Use it ' +
+      'when the user wants a chart or asks how something developed over a period.',
+    parameters: {type: 'object', required: ['symbol'], properties: {
+      symbol: {type: 'string', description: 'Symbol or name, e.g. "SIE.DE" or "Siemens"'},
+      range: {type: 'string', description: 'Period: 1d, 5d, 1mo, 3mo, 6mo, ytd, 1y, 2y, 5y, 10y or max (default 3mo)'},
+      interval: {type: 'string', description: 'Optional candle length (1m, 5m, 15m, 60m, 1d, 1wk, 1mo); fits the period by default'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'stock_search',
+    description: 'Finds the symbols of shares, ETFs, indices and other securities by name, with exchange and type.',
+    parameters: {type: 'object', required: ['query'], properties: {
+      query: {type: 'string', description: 'A name, e.g. "Rheinmetall"'},
+    }},
+  }},
+]
+const MARKET_TOOL_NAMES = new Set(MARKET_TOOLS.map(t => t.function.name))
+
+const marketNote = () =>
+  `Jetzt ist ${new Date().toLocaleString('de-DE', {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit'})}. ` +
+  'Für Börsenkurse hast du stock_quote (aktuelle Kurse), stock_chart (zeigt dem Benutzer einen Kerzenchart und gibt dir ' +
+  'die Kennzahlen) und stock_search (findet Symbole). Nimm sie, statt Kurse aus dem Gedächtnis zu nennen -- die ändern ' +
+  'sich ständig. Symbole: deutsche Aktien mit .DE (Xetra: SAP.DE, SIE.DE), US-Aktien ohne Endung (AAPL, NVDA), Indizes ' +
+  'mit ^ (^GDAXI DAX, ^GSPC S&P 500, ^IXIC Nasdaq), Krypto wie BTC-EUR, Devisen wie EURUSD=X; Firmennamen gehen auch. ' +
+  'Nenne Kurs, Veränderung und den Zeitpunkt der Daten (bis zu 15 Minuten verzögert möglich). Du ordnest die Zahlen ein, ' +
+  'gibst aber keine Kauf- oder Verkaufsempfehlungen.'
 
 const fileNote =
   'Mit create_file legst du Dateien an, die der Benutzer im Chat herunterladen kann. Will er eine Datei (einen ' +
@@ -1091,7 +1177,7 @@ function renderMessage(m, i) {
   } else {
     const think = el('details', 'thinking')
     think.append(el('summary'), el('div', 'md'))
-    bubble.append(think, renderResearch(m), el('div', 'md content'), renderGenerated(m), renderDownloads(m, i), el('div', 'error'))
+    bubble.append(think, renderResearch(m), el('div', 'md content'), renderGenerated(m), renderMarkets(m, i), renderDownloads(m, i), el('div', 'error'))
     meta.append(el('span', 'stats'), action('Kopieren', b => copy(splitThink(m.content)[1], b)))
     if (i === chat.messages.length - 1) meta.append(action('Neu generieren', regenerate))
   }
@@ -1142,6 +1228,8 @@ function renderResearch(m) {
     } else if (['map', 'symbol', 'code'].includes(s.kind)) {
       li.append({map: '🗺 ', symbol: '🔣 ', code: '🔎 '}[s.kind], el('span', 'q', s.kind === 'map' ? s.path : `„${s.query}“`),
         s.error ? ` – ${s.error}` : s.kind === 'map' ? '' : ` – ${s.hits ?? 0} Treffer`)
+    } else if (s.kind === 'stock') {
+      li.append('📈 ', el('span', 'q', `„${s.query}“`), s.error ? ` – ${s.error}` : ` – ${s.hits ?? 0} Treffer`)
     } else if (s.kind === 'template') {
       li.append('📋 ', el('span', 'q', s.name || `„${s.query}“`),
         s.error ? ` – ${s.error}` : s.name ? ' – als Workflow geholt' : ` – ${s.hits ?? 0} Vorlagen`)
@@ -1217,7 +1305,7 @@ function updateAssistant(wrap, m, streaming) {
     think.querySelector('summary').textContent = streaming && !content ? 'Denkt nach…' : 'Gedankengang'
     think.querySelector('.md').innerHTML = markdown(thinking)
   }
-  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.toolState || m.generated?.length || m.downloads?.length
+  wrap.querySelector('.content').innerHTML = content || !streaming || thinking || m.imageState || m.toolState || m.generated?.length || m.downloads?.length || m.markets?.length || m.marketState
     ? markdown(content) : '<span class="typing"></span>'
   wrap.querySelector('.error').textContent = m.error || ''
   wrap.querySelector('.stats').textContent = stats(m)
@@ -1264,6 +1352,8 @@ function toOllama(m) {
   // A picture or clip made by the switch: the model hears that it exists.
   if (m.generated?.length && !m.toolCalls?.length && !content.trim())
     content = m.generated.map(g => `[${g.kind === 'video' ? 'Video' : 'Bild'} mit ComfyUI erzeugt: „${g.prompt}“]`).join('\n')
+  // Prices the switch fetched: the model hears the numbers, so one can ask about them.
+  if (m.markets?.length && !m.toolCalls?.length && !content.trim()) content = m.markets.map(marketText).join('\n')
   const out = {role: m.role, content: [...files, content].filter(Boolean).join('\n\n')}
   if (m.images?.length) out.images = m.images.map(u => u.slice(u.indexOf(',') + 1))
   if (m.toolCalls?.length) out.tool_calls = m.toolCalls
@@ -1274,6 +1364,16 @@ function toOllama(m) {
 async function send() {
   const text = $('#input').value.trim()
   if (abort || (!text && !pendingImages.length && !pendingFiles.length)) return
+  // The fast way to numbers: the switch, or /kurs in front -- no language model in between.
+  const ask = mode === 'market' ? text : text.match(/^\/(?:kurs|k|chart)\s+([\s\S]+)/i)?.[1]
+  if (ask?.trim()) {
+    chat.messages.push({role: 'user', content: text, marketMode: true})
+    chat.title ||= '📈 ' + ask.split('\n')[0].slice(0, 58)
+    $('#input').value = ''
+    autosize()
+    renderChat()
+    return showMarkets(ask)
+  }
   if (mode && text) {
     chat.messages.push({role: 'user', content: text, ...(mode === 'video' ? {videoMode: true} : {imageMode: true})})
     chat.title ||= (mode === 'video' ? '🎬 ' : '🖼 ') + text.split('\n')[0].slice(0, 58)
@@ -1378,6 +1478,350 @@ async function shrink(mime, b64, max = 1568) {
   g.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
   bitmap.close()
   return canvas.toDataURL('image/jpeg', 0.88)
+}
+
+// ---------- Stock market ----------
+
+const RANGE_BUTTONS = [['1d', '1T'], ['5d', '5T'], ['1mo', '1M'], ['3mo', '3M'], ['6mo', '6M'], ['1y', '1J'], ['5y', '5J'], ['max', 'Max']]
+const RANGE_NAMES = {'1d': 'Tag', '5d': '5 Tage', '1mo': 'Monat', '3mo': '3 Monate', '6mo': '6 Monate', 'ytd': 'seit Jahresbeginn',
+  '1y': 'Jahr', '2y': '2 Jahre', '5y': '5 Jahre', '10y': '10 Jahre', 'max': 'gesamt'}
+const decimals = v => Math.abs(v) < 10 ? 4 : 2
+const priceFmt = v => v == null ? '–' : v.toLocaleString('de-DE', {minimumFractionDigits: decimals(v), maximumFractionDigits: decimals(v)})
+const pctFmt = v => v == null ? '–' : `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(v).toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 2})} %`
+const signed = v => v == null ? '' : `${v > 0 ? '+' : v < 0 ? '−' : '±'}${priceFmt(Math.abs(v))}`
+const volFmt = v => !v ? '–' : v >= 1e9 ? `${(v / 1e9).toLocaleString('de-DE', {maximumFractionDigits: 1})} Mrd.`
+  : v >= 1e6 ? `${(v / 1e6).toLocaleString('de-DE', {maximumFractionDigits: 1})} Mio.` : v.toLocaleString('de-DE')
+const trend = v => v > 0 ? 'up' : v < 0 ? 'down' : 'flat'
+const arrow = v => v > 0 ? '▲' : v < 0 ? '▼' : '■'
+const stamp = t => t ? new Date(t * 1000).toLocaleString('de-DE', {weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '–'
+const iso = t => t ? new Date(t * 1000).toISOString() : null
+
+const fetchChart = (symbol, range, interval, signal) =>
+  json('markets/chart', {method: 'POST', signal, body: JSON.stringify({symbol, range, interval})})
+
+// One line per price for the model, when the switch fetched them without it.
+function marketText(item) {
+  if (item.kind === 'quotes') return item.quotes.map(q => q.error ? `[${q.symbol}: ${q.error}]`
+    : `[Kurs ${q.name} (${q.symbol}): ${priceFmt(q.price)} ${q.currency || ''}, ${pctFmt(q.change_pct)} zum Vortag, Stand ${stamp(q.time)}]`).join('\n')
+  const d = item.data, m = d.meta, st = d.stats
+  return `[Kerzenchart ${m.name} (${m.symbol}), ${RANGE_NAMES[d.range] || d.range} in ${d.interval}-Kerzen: Kurs ${priceFmt(m.price)} ${m.currency || ''} ` +
+    `(${pctFmt(m.change_pct)} zum Vortag), im Zeitraum ${pctFmt(st.change_pct)}, Hoch ${priceFmt(st.high)}, Tief ${priceFmt(st.low)}` +
+    (st.sma20 ? `, Ø20 ${priceFmt(st.sma20)}` : '') + (st.sma50 ? `, Ø50 ${priceFmt(st.sma50)}` : '') +
+    (st.rsi14 != null ? `, RSI14 ${st.rsi14}` : '') + `, Stand ${stamp(m.time)}]`
+}
+
+// What the model gets from a chart: the figures and the last candles, not all of them.
+function chartForModel(d) {
+  return {quote: d.meta, range: d.range, interval: d.interval,
+    stats: {...d.stats, from: iso(d.stats.from), to: iso(d.stats.to)},
+    last_candles: d.candles.slice(-8).map(([t, o, h, l, c, v]) => ({time: iso(t), open: o, high: h, low: l, close: c, volume: v})),
+    source: `Yahoo Finance, Stand ${stamp(d.meta.time)} (bis zu 15 Minuten verzögert möglich)`,
+    shown_to_user: 'Der Benutzer sieht den Kerzenchart im Chat.'}
+}
+
+// stock_quote, stock_chart, stock_search for the model; quotes and charts also go on screen.
+async function marketTool(name, args, msg, redraw, signal) {
+  let symbols = args.symbols
+  if (typeof symbols === 'string') try { symbols = JSON.parse(symbols) } catch { symbols = symbols.split(/[,;]+/) }
+  msg.research ||= []
+  msg.toolState = {stock_quote: `Fragt Kurse ab: ${[].concat(symbols || []).join(', ')}…`,
+    stock_chart: `Holt den Chart von ${args.symbol || ''}…`, stock_search: `Sucht Wertpapiere: „${args.query || ''}“…`}[name]
+  redraw()
+  try {
+    if (name === 'stock_search') {
+      const r = await json('markets/search', {method: 'POST', signal, body: JSON.stringify({query: args.query})})
+      msg.research.push({kind: 'stock', query: r.query, hits: r.results.length})
+      return r
+    }
+    if (name === 'stock_quote') {
+      const r = await json('markets/quote', {method: 'POST', signal, body: JSON.stringify({symbols})})
+      ;(msg.markets ||= []).push({kind: 'quotes', quotes: r.quotes, fetched: r.fetched})
+      return {quotes: r.quotes, source: 'Yahoo Finance (bis zu 15 Minuten verzögert möglich)',
+        shown_to_user: 'Der Benutzer sieht die Kurse als Tabelle im Chat.'}
+    }
+    const d = await fetchChart(args.symbol, args.range, args.interval, signal)
+    ;(msg.markets ||= []).push({kind: 'chart', data: d})
+    return chartForModel(d)
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    msg.research.push({kind: 'stock', query: args.query || args.symbol || [].concat(symbols || []).join(', '), error: e.message})
+    return {ok: false, error: e.message}
+  } finally {
+    delete msg.toolState
+    redraw()
+  }
+}
+
+// The switch: "Siemens", "SAP, DAX", "Nvidia 1j" -- straight to the numbers, no model.
+// One security gets its chart, several a table (and a chart where a period was given).
+async function showMarkets(text) {
+  const c = chat
+  const msg = {role: 'assistant', content: '', model: 'Börse · Yahoo Finance', markets: [], marketState: 'Holt die Kurse…'}
+  c.messages.push(msg)
+  messagesBox.querySelector('.empty')?.remove()
+  let wrap = renderMessage(msg, c.messages.length - 1)
+  messagesBox.append(wrap)
+  messagesBox.scrollTop = messagesBox.scrollHeight
+  const ctrl = abort = new AbortController()
+  setBusy(true)
+  try {
+    const {items} = await json('markets/resolve', {method: 'POST', signal: ctrl.signal, body: JSON.stringify({text})})
+    if (items.length > 1) {
+      const r = await json('markets/quote', {method: 'POST', signal: ctrl.signal, body: JSON.stringify({symbols: items.map(i => i.query)})})
+      msg.markets.push({kind: 'quotes', quotes: r.quotes, fetched: r.fetched})
+    }
+    for (const it of items.length === 1 ? items : items.filter(i => i.range)) {
+      try {
+        msg.markets.push({kind: 'chart', data: await fetchChart(it.query, it.range || '1d', null, ctrl.signal)})
+      } catch (e) {
+        if (e.name === 'AbortError') throw e
+        msg.error = [msg.error, `${it.query}: ${e.message}`].filter(Boolean).join('\n')
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') msg.error = e.message
+  } finally {
+    delete msg.marketState
+    if (abort === ctrl) {
+      abort = null
+      setBusy(false)
+    }
+    c.updated = Date.now()
+    if (chat === c) wrap.replaceWith(wrap = renderMessage(msg, c.messages.length - 1))
+    messagesBox.scrollTop = messagesBox.scrollHeight
+    await saveChat(c)
+  }
+}
+
+function renderMarkets(m, i) {
+  const box = el('div', 'markets')
+  for (const item of m.markets || []) box.append(item.kind === 'quotes' ? quotesCard(item, m, i) : chartCard(item))
+  if (m.marketState) box.append(el('div', 'image-state', m.marketState))
+  box.hidden = !box.childElementCount
+  return box
+}
+
+function changeSpan(change, pct) {
+  const span = el('span', `mk-change ${trend(pct ?? change)}`, `${arrow(pct ?? change)} `)
+  if (change != null) span.append(el('span', 'abs', signed(change) + ' '))
+  span.append(`(${pctFmt(pct)})`)
+  return span
+}
+
+function quotesCard(item, m, i) {
+  const card = el('div', 'market')
+  const table = el('table', 'quotes')
+  for (const q of item.quotes) {
+    const tr = el('tr')
+    const name = el('td')
+    name.append(el('div', 'mk-name', q.name || q.symbol), el('div', 'mk-sub', [q.symbol, q.exchange].filter(Boolean).join(' · ')))
+    if (q.error) {
+      tr.append(name, Object.assign(el('td', 'err', q.error), {colSpan: 4}))
+    } else {
+      const price = el('td', 'num')
+      price.append(el('b', '', priceFmt(q.price)), ` ${q.currency || ''}`)
+      const ch = el('td', 'num')
+      ch.append(changeSpan(q.change, q.change_pct))
+      const range = el('td', 'num mk-sub rng', q.day_low != null ? `${priceFmt(q.day_low)} – ${priceFmt(q.day_high)}` : '')
+      range.title = 'Tagesspanne'
+      const go = el('td', 'num')
+      go.append(action('Chart', async b => {
+        b.disabled = true
+        try {
+          m.markets.push({kind: 'chart', data: await fetchChart(q.symbol, '1d')})
+          card.closest('.msg')?.replaceWith(renderMessage(m, i))
+          await saveChat(chat)
+        } catch (e) {
+          toast(`${q.symbol}: ${e.message}`)
+          b.disabled = false
+        }
+      }))
+      tr.append(name, price, ch, range, go)
+    }
+    table.append(tr)
+  }
+  card.append(table, el('div', 'mk-meta', `Stand ${stamp(Math.max(0, ...item.quotes.map(q => q.time || 0)))} · Yahoo Finance, bis 15 min verzögert möglich`))
+  return card
+}
+
+// A candlestick chart card. Its period buttons, Live and the averages change the
+// card in place; the data stays with the message (and the chat file).
+function chartCard(item) {
+  const card = el('div', 'market')
+  card._item = item
+  card._sma = false
+  fillChart(card)
+  return card
+}
+
+function fillChart(card) {
+  const d = card._item.data, m = d.meta, st = d.stats
+  const head = el('div', 'mk-head'), left = el('div'), right = el('div')
+  left.append(el('div', 'mk-name', m.name), el('div', 'mk-sub', [m.symbol, m.exchange, m.type && {EQUITY: 'Aktie', INDEX: 'Index',
+    CRYPTOCURRENCY: 'Krypto', CURRENCY: 'Devisen', ETF: 'ETF', FUTURE: 'Future', MUTUALFUND: 'Fonds'}[m.type]].filter(Boolean).join(' · ')))
+  const price = el('div', 'mk-price', priceFmt(m.price))
+  price.append(el('small', '', m.currency || ''))
+  right.append(price, changeSpan(m.change, m.change_pct))
+  right.style.textAlign = 'right'
+  head.append(left, right)
+
+  const controls = el('div', 'mk-controls')
+  for (const [r, label] of RANGE_BUTTONS) {
+    const b = action(label, () => reloadChart(card, r))
+    b.setAttribute('aria-pressed', String(d.range === r))
+    b.title = RANGE_NAMES[r]
+    controls.append(b)
+  }
+  controls.append(el('span', 'spacer'))
+  const sma = action('', () => { card._sma = !card._sma; fillChart(card) })
+  sma.innerHTML = '<i style="background:var(--sma1)"></i>Ø 20 <i style="background:var(--sma2)"></i>Ø 50'
+  sma.setAttribute('aria-pressed', String(card._sma))
+  sma.title = 'Gleitende Durchschnitte über 20 und 50 Kerzen'
+  const live = action('Live', () => setLive(card, !card._live))
+  live.setAttribute('aria-pressed', String(!!card._live))
+  live.title = 'Alle 15 Sekunden neu holen (Intraday), sonst jede Minute'
+  controls.append(sma, live, action('↻', () => reloadChart(card, d.range)))
+
+  const plot = el('div', 'mk-plot')
+  plot._draw = () => drawCandles(plot, card._item.data, card._sma)
+  const meta = el('div', 'mk-meta', `${RANGE_NAMES[d.range] || d.range}: ${pctFmt(st.change_pct)} · Hoch ${priceFmt(st.high)} · ` +
+    `Tief ${priceFmt(st.low)}` + (st.rsi14 != null ? ` · RSI 14: ${st.rsi14.toLocaleString('de-DE')}` : '') +
+    ` · Stand ${stamp(m.time)} · Yahoo Finance, bis 15 min verzögert möglich`)
+  card.replaceChildren(head, controls, plot, meta)
+  chartResize.observe(plot)
+  requestAnimationFrame(() => plot._draw())
+}
+
+const chartResize = new ResizeObserver(entries => {
+  for (const e of entries) {
+    if (!document.contains(e.target)) chartResize.unobserve(e.target)
+    else e.target._draw?.()
+  }
+})
+
+async function reloadChart(card, range) {
+  card.classList.add('busy')
+  try {
+    card._item.data = await fetchChart(card._item.data.meta.symbol, range)
+    fillChart(card)
+    if (!card._live) await saveChat(chat)
+  } catch (e) {
+    toast(`${card._item.data.meta.symbol}: ${e.message}`)
+  } finally {
+    card.classList.remove('busy')
+  }
+}
+
+function setLive(card, on) {
+  clearInterval(card._live)
+  card._live = null
+  if (on) {
+    const every = card._item.data.intraday ? 15000 : 60000
+    card._live = setInterval(() => {
+      if (!document.contains(card)) return setLive(card, false)
+      reloadChart(card, card._item.data.range)
+    }, every)
+  } else {
+    saveChat(chat)
+  }
+  fillChart(card)
+}
+
+// 1, 2, 5 times a power of ten, so that about `count` lines fit between lo and hi
+function niceTicks(lo, hi, count = 5) {
+  const raw = (hi - lo) / count, mag = 10 ** Math.floor(Math.log10(raw || 1))
+  const step = [1, 2, 2.5, 5, 10].map(k => k * mag).find(s => s >= raw) || mag * 10
+  const out = []
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10))
+  return out
+}
+
+const sma = (closes, n) => closes.map((_, i) => i + 1 < n ? null : closes.slice(i + 1 - n, i + 1).reduce((a, b) => a + b, 0) / n)
+
+function candleTime(t, d, long) {
+  const date = new Date(t * 1000)
+  if (['1wk', '1mo', '3mo'].includes(d.interval))
+    return date.toLocaleDateString('de-DE', long ? {month: 'long', year: 'numeric'} : {month: 'short', year: '2-digit'})
+  if (!d.intraday) return date.toLocaleDateString('de-DE', long ? {weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric'} : {day: '2-digit', month: '2-digit'})
+  if (long) return date.toLocaleString('de-DE', {weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'})
+  return d.range === '1d' ? date.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})
+    : date.toLocaleDateString('de-DE', {day: '2-digit', month: '2-digit'})
+}
+
+// The chart itself: candles on an even grid (nights and weekends leave no gaps),
+// the price axis on the right, volume underneath, the last price as a dashed line.
+// Rising candles are hollow, falling ones filled -- the shape says it, not only the colour.
+function drawCandles(plot, d, withSma) {
+  const W = plot.clientWidth
+  if (!W) return
+  const rows = d.candles, n = rows.length
+  const L = 4, R = 66, T = 8, PH = 214, GAP = 10, VH = 52, H = T + PH + GAP + VH + 18
+  const step = (W - L - R) / n, body = Math.max(1, Math.min(14, step * 0.68))
+  const x = i => L + step * (i + 0.5)
+  const closes = rows.map(r => r[4])
+  const s20 = withSma ? sma(closes, 20) : [], s50 = withSma ? sma(closes, 50) : []
+  let lo = Math.min(...rows.map(r => r[3]), ...s20.filter(v => v != null), ...s50.filter(v => v != null))
+  let hi = Math.max(...rows.map(r => r[2]), ...s20.filter(v => v != null), ...s50.filter(v => v != null))
+  const pad = (hi - lo) * 0.06 || hi * 0.01 || 1
+  lo -= pad
+  hi += pad
+  const y = v => T + (hi - v) / (hi - lo) * PH
+  const vmax = Math.max(1, ...rows.map(r => r[5] || 0))
+  const vy = v => T + PH + GAP + VH - (v || 0) / vmax * VH
+  const parts = []
+  for (const v of niceTicks(lo, hi, 5)) {
+    parts.push(`<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/>`,
+      `<text class="tick" x="${W - R + 6}" y="${y(v).toFixed(1)}" dominant-baseline="middle">${esc(priceFmt(v))}</text>`)
+  }
+  parts.push(`<line class="grid" x1="${L}" x2="${W - R}" y1="${T + PH + GAP + VH}" y2="${T + PH + GAP + VH}"/>`)
+  const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor((W - L - R) / 90))))
+  for (let i = 0; i < n; i += every) {
+    parts.push(`<text class="tick" x="${x(i).toFixed(1)}" y="${H - 3}" text-anchor="middle">${esc(candleTime(rows[i][0], d, false))}</text>`)
+  }
+  rows.forEach(([t, o, h, l, c, v], i) => {
+    const up = c >= o, col = up ? 'var(--up)' : 'var(--down)', cx = x(i).toFixed(1)
+    const top = y(Math.max(o, c)), bh = Math.max(1, Math.abs(y(o) - y(c)))
+    parts.push(`<rect x="${(x(i) - body / 2).toFixed(1)}" y="${vy(v).toFixed(1)}" width="${body.toFixed(1)}" ` +
+      `height="${(T + PH + GAP + VH - vy(v)).toFixed(1)}" fill="${col}" fill-opacity="0.45"/>`)
+    parts.push(`<line x1="${cx}" x2="${cx}" y1="${y(h).toFixed(1)}" y2="${y(l).toFixed(1)}" stroke="${col}" stroke-width="1"/>`)
+    parts.push(`<rect x="${(x(i) - body / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${body.toFixed(1)}" height="${bh.toFixed(1)}" ` +
+      `fill="${up && body > 2 ? 'var(--bg-side)' : col}" stroke="${col}" stroke-width="1"/>`)
+  })
+  for (const [line, color] of [[s20, 'var(--sma1)'], [s50, 'var(--sma2)']]) {
+    const pts = line.map((v, i) => v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`).filter(Boolean)
+    if (pts.length > 1) parts.push(`<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`)
+  }
+  const last = d.meta.price ?? closes.at(-1), ly = y(last)
+  const lastCol = (d.meta.change ?? 0) >= 0 ? 'var(--up)' : 'var(--down)'
+  if (ly >= T && ly <= T + PH) {
+    parts.push(`<line x1="${L}" x2="${W - R}" y1="${ly.toFixed(1)}" y2="${ly.toFixed(1)}" stroke="${lastCol}" stroke-dasharray="4 3" stroke-width="1"/>`,
+      `<rect x="${W - R + 2}" y="${(ly - 9).toFixed(1)}" width="${R - 4}" height="18" rx="4" fill="${lastCol}"/>`,
+      `<text x="${W - R + 6}" y="${ly.toFixed(1)}" dominant-baseline="middle" fill="#fff" font-size="11" font-weight="600">${esc(priceFmt(last))}</text>`)
+  }
+  const svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(`Kerzenchart ${d.meta.name}, ${RANGE_NAMES[d.range] || d.range}`)}">` +
+    parts.join('') + '<g class="hover"></g></svg>'
+  plot.innerHTML = svg
+  const tip = el('div', 'mk-tip')
+  tip.hidden = true
+  plot.append(tip)
+  const g = plot.querySelector('.hover')
+  const show = e => {
+    const r = plot.getBoundingClientRect()
+    const i = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left - L) / step)))
+    const [t, o, h, l, c, v] = rows[i]
+    const prev = i ? rows[i - 1][4] : o
+    g.innerHTML = `<line class="cross" x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${T}" y2="${T + PH + GAP + VH}"/>`
+    tip.innerHTML = `<div class="t">${esc(candleTime(t, d, true))}</div>` +
+      `Eröffnung <b>${esc(priceFmt(o))}</b> · Hoch <b>${esc(priceFmt(h))}</b><br>Tief <b>${esc(priceFmt(l))}</b> · Schluss <b>${esc(priceFmt(c))}</b><br>` +
+      `<span class="mk-change ${trend(c - prev)}">${arrow(c - prev)} ${esc(pctFmt(prev ? 100 * (c - prev) / prev : 0))}</span> · Volumen ${esc(volFmt(v))}` +
+      (withSma && s20[i] != null ? `<br>Ø 20 ${esc(priceFmt(s20[i]))}` + (s50[i] != null ? ` · Ø 50 ${esc(priceFmt(s50[i]))}` : '') : '')
+    tip.hidden = false
+    const px = x(i)
+    tip.style.left = (px + 14 + tip.offsetWidth > W ? Math.max(0, px - 14 - tip.offsetWidth) : px + 14) + 'px'
+  }
+  plot.onpointermove = show
+  plot.onpointerdown = show
+  plot.onpointerleave = () => { g.innerHTML = ''; tip.hidden = true }
 }
 
 // ---------- Files for the user ----------
@@ -1681,6 +2125,15 @@ async function paint(kind = 'image') {
 
 // A tool call written out as JSON, if it names one of `tools`: {function: {name, arguments}}.
 // The arguments may themselves be a JSON string, or the bare value of the first required one.
+// A call as a comparable string: name and arguments with sorted keys.
+function callKey(call) {
+  let args = call.function?.arguments ?? {}
+  if (typeof args === 'string') try { args = JSON.parse(args) } catch {}
+  const sorted = v => v && typeof v === 'object' && !Array.isArray(v)
+    ? Object.fromEntries(Object.keys(v).sort().map(k => [k, sorted(v[k])])) : v
+  return `${call.function?.name}:${JSON.stringify(sorted(args))}`
+}
+
 function jsonCall(text, tools) {
   // Models write TeX into it ($\sqrt{2}$): a backslash that starts no JSON escape stands for itself.
   const parse = s => {
@@ -1692,7 +2145,11 @@ function jsonCall(text, tools) {
   const name = j?.action ?? j?.name ?? j?.tool ?? j?.function?.name
   const tool = tools.find(t => t.function.name === name)
   if (!tool) return null
-  let args = j.action_input ?? j.arguments ?? j.parameters ?? j.args ?? j.tool_input ?? j.function?.arguments ?? {}
+  let args = j.action_input ?? j.arguments ?? j.parameters ?? j.args ?? j.tool_input ?? j.function?.arguments
+  if (args === undefined) {   // flat: {"action": "stock_chart", "symbol": "RHM.DE", "range": "3mo"}
+    const {[j.action !== undefined ? 'action' : j.name !== undefined ? 'name' : 'tool']: _, ...rest} = j
+    args = rest
+  }
   if (typeof args === 'string') {
     try { args = parse(args) } catch { args = {[tool.function.parameters.required?.[0] ?? 'input']: args} }
   }
@@ -1703,7 +2160,7 @@ async function generate(round = 0) {
   const c = chat, model = $('#model').value
   // Tool calls and their answers belong to the conversation even without text.
   const history = c.messages.filter(m => m.role === 'user' || m.role === 'tool' || m.toolCalls?.length ||
-    m.generated?.length || splitThink(m.content)[1].trim())
+    m.generated?.length || m.markets?.length || splitThink(m.content)[1].trim())
   const msg = {role: 'assistant', content: '', thinking: '', model}
   c.model = model
   c.messages.push(msg)
@@ -1716,7 +2173,9 @@ async function generate(round = 0) {
   const question = [...c.messages].reverse().find(m => m.role === 'user')?.content
   const shared = canUseTools && c.folders?.length ? c.folders : null
   const making = settings.fileTool && canUseTools
-  const system = [c.system, web && researchNote(question), shared && folderNote(shared), making && fileNote].filter(Boolean).join('\n\n')
+  const trading = settings.marketTool && canUseTools
+  const system = [c.system, web && researchNote(question), shared && folderNote(shared), making && fileNote,
+    trading && marketNote()].filter(Boolean).join('\n\n')
   const [messages, compacted] = compact(history.map(toOllama), Number(settings.num_ctx) || knownCtx[model] || 8192)
   if (compacted) msg.compacted = compacted
   const body = {
@@ -1730,7 +2189,7 @@ async function generate(round = 0) {
   if (settings.think && !$('#think').disabled) body.think = {on: true, off: false}[settings.think] ?? settings.think
   const tools = [...(settings.imageTool && canUseTools && imageWorkflows.length ? [IMAGE_TOOL] : []),
     ...(settings.videoTool && canUseTools && videoWorkflows.length ? [VIDEO_TOOL] : []), ...(web ? WEB_TOOLS : []),
-    ...(shared ? FILE_TOOLS : []), ...(making ? MAKE_TOOLS : [])]
+    ...(shared ? FILE_TOOLS : []), ...(making ? MAKE_TOOLS : []), ...(trading ? MARKET_TOOLS : [])]
   if (tools.length) body.tools = tools
 
   const ctrl = abort = new AbortController()
@@ -1781,15 +2240,22 @@ async function generate(round = 0) {
     // {"action": "generate_image", "action_input": "{…}"} (LangChain's form) or
     // {"name": …, "arguments": …}, bare or in a ```json block -- and then
     // believes it made it. Taken out and run too, for tools it was offered.
+    // It also writes a call it has just made into its answer once more: that one is
+    // only taken out, not run again.
     if (tools.length && !msg.toolCalls?.length && !textCalls.length) {
-      // [where, how long, the JSON]: ```json blocks, then from a line starting with { to the end
-      const blocks = [...msg.content.matchAll(/```(?:json)?[ \t]*\n([\s\S]*?)\n?```/g)].map(m => [m.index, m[0].length, m[1]])
-      for (const m of msg.content.matchAll(/^\{/gm)) blocks.push([m.index, Infinity, msg.content.slice(m.index)])
-      for (const [at, length, text] of blocks) {
-        const call = jsonCall(text, tools)
-        if (!call) continue
+      const since = c.messages.findLastIndex(m => m.role === 'user')
+      const done = c.messages.slice(since).flatMap(m => m.toolCalls || []).map(callKey)
+      for (;;) {
+        // [where, how long, the JSON]: ```json blocks, single lines that are one object, then from a { line to the end
+        const blocks = [...msg.content.matchAll(/```(?:json)?[ \t]*\n([\s\S]*?)\n?```/g)].map(m => [m.index, m[0].length, m[1]])
+        for (const m of msg.content.matchAll(/^[ \t]*\{.*\}[ \t]*$/gm)) blocks.push([m.index, m[0].length, m[0]])
+        for (const m of msg.content.matchAll(/^\{/gm)) blocks.push([m.index, Infinity, msg.content.slice(m.index)])
+        const hit = blocks.map(b => [...b, jsonCall(b[2], tools)]).find(b => b[3])
+        if (!hit) break
+        const [at, length, , call] = hit
+        msg.content = (msg.content.slice(0, at) + msg.content.slice(at + length)).replace(/\n{3,}/g, '\n\n').trim()
+        if (done.includes(callKey(call))) continue
         textCalls.push(call)
-        msg.content = (msg.content.slice(0, at) + msg.content.slice(at + length)).trim()
         break
       }
     }
@@ -1831,6 +2297,8 @@ async function generate(round = 0) {
           result = await makeFile(args, msg, redraw, ctrl.signal)
         } else if (f.name === 'comfy_nodes' && making) {
           result = await lookupNodes(args, msg, redraw, ctrl.signal)
+        } else if (MARKET_TOOL_NAMES.has(f.name) && trading) {
+          result = await marketTool(f.name, args, msg, redraw, ctrl.signal)
         } else if (f.name === 'comfy_templates' && making) {
           result = await lookupTemplates(args, msg, redraw, ctrl.signal)
         } else {
@@ -1905,7 +2373,8 @@ function regenerate() {
   while (chat.messages.length && chat.messages.at(-1).role !== 'user') chat.messages.pop()
   renderChat()
   const last = chat.messages.at(-1)
-  if (last?.videoMode) paint('video')
+  if (last?.marketMode) showMarkets(last.content.replace(/^\/(?:kurs|k|chart)\s+/i, ''))
+  else if (last?.videoMode) paint('video')
   else if (last?.imageMode) paint('image')
   else generate()
 }
@@ -1914,7 +2383,7 @@ function editMessage(i) {
   if (abort) return
   const m = chat.messages[i]
   chat.messages.splice(i)
-  setMode(m.videoMode ? 'video' : m.imageMode ? 'image' : '')
+  setMode(m.marketMode ? 'market' : m.videoMode ? 'video' : m.imageMode ? 'image' : '')
   $('#input').value = m.content
   pendingImages = m.images || []
   pendingFiles = m.files || []
@@ -2065,6 +2534,7 @@ $('#folder-share').onclick = () => {
 }
 $('#image-mode').onclick = () => { setMode(mode === 'image' ? '' : 'image'); $('#input').focus() }
 $('#video-mode').onclick = () => { setMode(mode === 'video' ? '' : 'video'); $('#input').focus() }
+$('#market-mode').onclick = () => { setMode(mode === 'market' ? '' : 'market'); $('#input').focus() }
 $('#file').onchange = e => { addFiles([...e.target.files]); e.target.value = '' }
 $('#model').onchange = () => selectModel()
 $('#new-chat').onclick = newChat
@@ -2094,17 +2564,19 @@ for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize
   input.value = settings[id]
   input.onchange = () => { settings[id] = input.value; saveSettings() }
 }
-for (const id of ['imageShare', 'imageTool', 'videoTool', 'webResearch', 'fileTool']) {
+for (const id of ['imageShare', 'imageTool', 'videoTool', 'webResearch', 'fileTool', 'marketTool']) {
   const input = $('#' + id)
   input.checked = settings[id]
   input.onchange = () => { settings[id] = input.checked; saveSettings() }
 }
 
 function setMode(m) {
-  mode = m === 'image' && imageWorkflows.length || m === 'video' && videoWorkflows.length ? m : ''
+  mode = m === 'image' && imageWorkflows.length || m === 'video' && videoWorkflows.length || m === 'market' ? m : ''
   $('#image-mode').setAttribute('aria-pressed', String(mode === 'image'))
   $('#video-mode').setAttribute('aria-pressed', String(mode === 'video'))
+  $('#market-mode').setAttribute('aria-pressed', String(mode === 'market'))
   $('#input').placeholder = mode === 'image' ? 'Bild beschreiben (Englisch klappt am besten)…'
+    : mode === 'market' ? 'Wertpapiere, durch Komma getrennt: „Siemens“, „SAP, DAX“, „Nvidia 1j“, „BTC-EUR 5t“…'
     : mode === 'video' ? 'Video beschreiben: Szene, Kamera, Handlung, dazu „Audio:“ für Ton und Sprache (Englisch klappt am besten)…'
     : $('#model').value ? `Nachricht an ${$('#model').value}…` : 'Erst ein Modell herunterladen (oben rechts: Modelle)'
 }

@@ -7,7 +7,8 @@ da. Der Server reicht /chat/api/* an Ollama weiter (streamend), speichert die
 Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder und Videos
 erzeugt ComfyUI (imagegen.py); sie liegen in der Ablage unter images/. Im Internet
 sucht und liest websearch.py (SearXNG). Dateien, die das Modell zum Herunterladen
-anlegt, liegen unter downloads/ (downloads.py).
+anlegt, liegen unter downloads/ (downloads.py). Boersenkurse und Kerzen holt
+markets.py (Yahoo Finance).
 """
 
 import ipaddress
@@ -28,6 +29,7 @@ import comfytemplates
 import downloads
 import folders
 import imagegen
+import markets
 import websearch
 
 PAGE = Path(__file__).resolve().parent / "static" / "chat.html"
@@ -164,6 +166,9 @@ def handle(handler, ollama, comfy):
                   "/chat/files/map", "/chat/files/symbol", "/chat/files/code", "/chat/files/note",
                   "/chat/files/status") and method == "POST":
         files(handler, path.rsplit("/", 1)[1])
+    elif path in ("/chat/markets/search", "/chat/markets/quote", "/chat/markets/chart",
+                  "/chat/markets/resolve") and method == "POST":
+        market(handler, path.rsplit("/", 1)[1])
     elif path == "/chat/downloads" and method == "POST":
         make_file(handler, comfy)
     elif (m := DOWNLOAD_PATH.fullmatch(path)) and method == "GET":
@@ -228,6 +233,21 @@ def image(handler, ollama, comfy):
         pass  # Stopp oder Seite zu
     finally:
         states.close()   # bricht den Auftrag in ComfyUI ab, falls er noch laeuft
+
+
+def market(handler, what):
+    """Boersenkurse (markets.py): suchen, Kurse, Kerzen und die Eingabe des Schnellwegs."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+        result = (markets.search(req.get("query")) if what == "search"
+                  else markets.quotes(req.get("symbols")) if what == "quote"
+                  else markets.candles(req.get("symbol"), req.get("range"), req.get("interval")) if what == "chart"
+                  else {"items": markets.resolve(req.get("text"))})
+    except ValueError as e:
+        return reply_json(handler, {"error": str(e)}, 400)
+    except RuntimeError as e:
+        return reply_json(handler, {"error": str(e)}, 502)
+    reply_json(handler, result)
 
 
 def make_file(handler, comfy):
