@@ -104,6 +104,8 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
 .research li { margin: 2px 0; }
 .research a { color: inherit; }
 .research .q { color: var(--fg); }
+.research details.note summary { cursor: pointer; }
+.research .note-text { margin: 2px 0 4px 18px; color: var(--fg); white-space: pre-wrap; }
 /* Files the model made (create_file): a card each, with download and a look inside */
 .downloads { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 8px; }
 .download { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--bg-side); }
@@ -518,6 +520,45 @@ const FILE_TOOLS = [
       path: {type: 'string', description: 'Optional: only in this subfolder or file'},
     }},
   }},
+  // The project memory (codeindex.py): a map, symbols, ranked search and the model's own notes.
+  {type: 'function', function: {
+    name: 'project_map',
+    description: 'The compressed map of a shared project: folders with their size, files with their line count and ' +
+      'either your note about them (—) or their main symbols (·). Start here with a large project, then go deeper ' +
+      'with path. Much cheaper than reading files.',
+    parameters: {type: 'object', properties: {
+      path: {type: 'string', description: 'Folder to show; empty for the whole project'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'find_symbol',
+    description: 'Finds where a class, struct, function or method is defined in the shared folders (file:line, kind, ' +
+      'signature), e.g. "Mixer", "AssetDatabase::refresh" or a part of a name.',
+    parameters: {type: 'object', required: ['name'], properties: {
+      name: {type: 'string', description: 'The name, also Class::method or Class.method'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'search_code',
+    description: 'Searches the shared project by words and returns the most relevant passages (file:lines with the ' +
+      'matching lines). Finds parts of names too ("shadow" finds renderShadowMap). Use it for "where/how is X done?"; ' +
+      'search_files finds exact text.',
+    parameters: {type: 'object', required: ['query'], properties: {
+      query: {type: 'string', description: 'Words, e.g. "shadow cascade split"'},
+      path: {type: 'string', description: 'Optional: only in this subfolder'},
+    }},
+  }},
+  {type: 'function', function: {
+    name: 'save_note',
+    description: 'Saves what you learned about a file, a folder or the whole project (path empty) in the project memory: ' +
+      'its purpose, the main classes and functions, how it connects to the rest -- a few compact sentences. Notes show ' +
+      'in project_map and read_file, in later chats too, and stay when old file contents drop out of the conversation. ' +
+      'Write one after reading a file that matters; a new note on the same path replaces the old one.',
+    parameters: {type: 'object', required: ['path', 'note'], properties: {
+      path: {type: 'string', description: 'The file or folder as the other tools show it; empty for the project'},
+      note: {type: 'string', description: 'The note, at most about 1000 characters'},
+    }},
+  }},
 ]
 const FILE_TOOL_NAMES = new Set(FILE_TOOLS.map(t => t.function.name))
 
@@ -577,7 +618,13 @@ const folderNote = folders =>
   '1. Finde die Stellen (search_files, list_files).\n' +
   '2. Lies sie mit read_file -- ein Suchtreffer zeigt nur eine Zeile. Was eine Funktion tut, steht in ihrer ' +
   'Definition (def, function, class …), nicht beim Aufruf: lies die Definition, start_line ein paar Zeilen davor.\n' +
-  '3. Erst dann antworten, und die Dateien (und Zeilen) nennen, auf die du dich stützt -- als `datei:zeile`, nicht als Link.'
+  '3. Erst dann antworten, und die Dateien (und Zeilen) nennen, auf die du dich stützt -- als `datei:zeile`, nicht als Link.\n' +
+  'Bei einem großen Projekt passt nicht alles in dein Gedächtnis, dafür gibt es das Projektgedächtnis: project_map zeigt ' +
+  'die komprimierte Karte mit deinen Notizen von früher, find_symbol findet Definitionen, search_code die passenden ' +
+  'Stellen. Lies dann gezielt (read_file mit start_line) statt ganzer Dateien. Hast du eine wichtige Datei verstanden, ' +
+  'halte das Wesentliche mit save_note fest (Zweck, wichtigste Klassen und Funktionen, Zusammenhänge): ältere ' +
+  'Dateiinhalte fallen aus dem Gespräch, wenn der Platz knapp wird, deine Notizen bleiben -- auch für spätere Chats. ' +
+  'Bittet dich der Benutzer, dir etwas zu merken, dann heißt das: save_note, für jede Datei und jeden Ordner, um die es ging.'
 
 // ---------- Markdown ----------
 
@@ -1060,7 +1107,10 @@ function renderResearch(m) {
   const count = kind => steps.filter(s => s.kind === kind).length
   const searches = count('search'), pages = count('fetch'), dirs = count('dir'), files = count('file'), greps = count('grep')
   const nodes = count('nodes'), templates = count('template'), failed = count('make')
-  box.append(el('summary', '', m.toolState || [searches || pages ? 'Recherche' : dirs || files || greps ? 'Dateien' : 'Werkzeuge',
+  const maps = count('map'), syms = count('symbol'), codes = count('code'), notes = count('note')
+  box.append(el('summary', '', m.toolState || [searches || pages ? 'Recherche' : dirs || files || greps || maps || syms || codes ? 'Dateien'
+    : notes ? 'Projektgedächtnis' : 'Werkzeuge', maps && `${maps}× Projektkarte`, syms && `${syms}× Definition gesucht`,
+    codes && `${codes}× Projekt durchsucht`, notes && `${notes} ${notes === 1 ? 'Notiz' : 'Notizen'} gespeichert`,
     searches && `${searches} ${searches === 1 ? 'Suche' : 'Suchen'}`, pages && `${pages} ${pages === 1 ? 'Seite' : 'Seiten'} gelesen`,
     dirs && `${dirs} Ordner angesehen`, files && `${files} ${files === 1 ? 'Datei' : 'Dateien'} gelesen`,
     greps && `${greps}× in Dateien gesucht`, templates && `${templates}× ComfyUI-Vorlagen`, nodes && `${nodes}× ComfyUI-Knoten nachgeschlagen`,
@@ -1085,6 +1135,13 @@ function renderResearch(m) {
     } else if (s.kind === 'nodes') {
       li.append('🧩 ', el('span', 'q', s.names?.length ? s.names.join(', ') : `„${s.query}“`),
         s.error ? ` – ${s.error}` : s.names?.length ? '' : ` – ${s.hits ?? 0} Treffer`)
+    } else if (s.kind === 'note' && !s.error) {
+      const d = el('details', 'note')
+      d.append(el('summary', '', `📝 Notiz zu ${s.path}`), el('div', 'note-text', s.text))
+      li.append(d)
+    } else if (['map', 'symbol', 'code'].includes(s.kind)) {
+      li.append({map: '🗺 ', symbol: '🔣 ', code: '🔎 '}[s.kind], el('span', 'q', s.kind === 'map' ? s.path : `„${s.query}“`),
+        s.error ? ` – ${s.error}` : s.kind === 'map' ? '' : ` – ${s.hits ?? 0} Treffer`)
     } else if (s.kind === 'template') {
       li.append('📋 ', el('span', 'q', s.name || `„${s.query}“`),
         s.error ? ` – ${s.error}` : s.name ? ' – als Workflow geholt' : ` – ${s.hits ?? 0} Vorlagen`)
@@ -1175,6 +1232,7 @@ function stats(m) {
     s.eval_duration && `${(s.eval_count / s.eval_duration * 1e9).toFixed(1)} tok/s`,
     `Kontext ${(s.prompt_eval_count || 0) + s.eval_count}`,
     s.done_reason === 'length' && 'abgeschnitten (Limit erreicht)',
+    m.compacted && `${m.compacted} ältere Werkzeugergebnisse verdichtet`,
   ].filter(Boolean).join(' · ')
 }
 
@@ -1275,22 +1333,27 @@ function knownUrl(c, url) {
 // One look into a shared folder for the model, noted in `msg` for the reader:
 // [answer for the model, pictures for it].
 async function folderTool(name, args, roots, msg, redraw, signal) {
-  const what = {list_files: 'list', read_file: 'read', search_files: 'search'}[name]
-  const kind = {list: 'dir', read: 'file', search: 'grep'}[what]
+  const what = {list_files: 'list', read_file: 'read', search_files: 'search', project_map: 'map',
+    find_symbol: 'symbol', search_code: 'code', save_note: 'note'}[name]
+  const kind = {list: 'dir', read: 'file', search: 'grep'}[what] || what
   msg.research ||= []
-  msg.toolState = what === 'read' ? `Liest ${args.path || ''}…` : what === 'search' ? `Sucht in den Dateien: „${args.query || ''}“…`
-    : `Schaut in ${args.path || 'den Ordner'}…`
+  msg.toolState = {read: `Liest ${args.path || ''}…`, search: `Sucht in den Dateien: „${args.query || ''}“…`,
+    map: `Sieht sich die Projektkarte an${args.path ? `: ${args.path}` : ''}… (beim ersten Mal wird das Projekt erfasst)`,
+    symbol: `Sucht die Definition von ${args.name || ''}…`, code: `Durchsucht das Projekt: „${args.query || ''}“…`,
+    note: `Notiert sich etwas zu ${args.path || 'dem Projekt'}…`}[what] || `Schaut in ${args.path || 'den Ordner'}…`
   redraw()
   try {
     const r = await json('files/' + what, {method: 'POST', signal, body: JSON.stringify({...args, roots})})
-    msg.research.push({kind, ...(what === 'search' ? {query: r.query, hits: r.count} : {path: r.folder || r.file}),
+    msg.research.push({kind, ...(what === 'search' || what === 'code' ? {query: r.query, hits: r.count}
+      : what === 'symbol' ? {query: r.name, hits: r.count} : what === 'note' ? {path: r.path, text: args.note}
+      : what === 'map' ? {path: args.path || 'Projekt'} : {path: r.folder || r.file}),
       ...(args.pattern && {pattern: args.pattern})})
     if (!r.image) return [r, []]
     if (!canSeeImages) return [{file: r.file, size: r.size, error: 'Ein Bild: dieses Modell kann keine Bilder sehen'}, []]
     return [{file: r.file, size: r.size, note: 'Das Bild hängt an dieser Nachricht'}, [await shrink(r.mime, r.image)]]
   } catch (e) {
     if (e.name === 'AbortError') throw e
-    msg.research.push({kind, path: args.path || '', query: args.query, error: e.message})
+    msg.research.push({kind, path: args.path || '', query: args.query ?? args.name, error: e.message})
     return [{ok: false, error: e.message}, []]
   } finally {
     delete msg.toolState
@@ -1473,6 +1536,11 @@ function renderFolders() {
   box.replaceChildren(...list.map((f, i) => {
     const d = el('div', 'chip', '📁 ' + f.split('/').pop())
     d.title = `${f}\nDas Modell darf hier lesen und suchen`
+    json('files/status', {method: 'POST', body: JSON.stringify({roots: [f]})}).then(r => {
+      const s = r.folders[0]
+      if (s?.files) d.title += `\nProjektgedächtnis: ${s.files.toLocaleString('de-DE')} Dateien, ` +
+        `${s.lines.toLocaleString('de-DE')} Zeilen, ${s.notes} ${s.notes === 1 ? 'Notiz' : 'Notizen'} des Modells`
+    }).catch(() => {})
     d.append(action('✕', () => { chat.folders.splice(i, 1); renderFolders(); saveChat(chat) }))
     return d
   }))
@@ -1649,9 +1717,11 @@ async function generate(round = 0) {
   const shared = canUseTools && c.folders?.length ? c.folders : null
   const making = settings.fileTool && canUseTools
   const system = [c.system, web && researchNote(question), shared && folderNote(shared), making && fileNote].filter(Boolean).join('\n\n')
+  const [messages, compacted] = compact(history.map(toOllama), Number(settings.num_ctx) || knownCtx[model] || 8192)
+  if (compacted) msg.compacted = compacted
   const body = {
     model,
-    messages: [...(system ? [{role: 'system', content: system}] : []), ...history.map(toOllama)],
+    messages: [...(system ? [{role: 'system', content: system}] : []), ...messages],
     stream: true,
     options: {},
   }
@@ -1779,6 +1849,7 @@ async function generate(round = 0) {
       setBusy(false)
     }
     if (!msg.thinking) delete msg.thinking
+    learnCtx(model)
     c.updated = Date.now()
     if (chat === c) {
       const stick = nearBottom()
@@ -1791,6 +1862,41 @@ async function generate(round = 0) {
     renderChat()   // "Neu generieren" moves on to the answer that follows
     await generate(round + 1)
   }
+}
+
+// What Ollama gave the model as context the last time (api/ps); until then a cautious guess.
+const knownCtx = {}
+async function learnCtx(model) {
+  const m = (await json('api/ps').catch(() => null))?.models?.find(x => x.name === model)
+  if (m?.context_length) knownCtx[model] = m.context_length
+}
+
+// A long look into a project fills the context with file contents, and Ollama
+// would silently cut off the start of the conversation. Before that, the
+// oldest tool answers shrink to a line saying what they were; what the model
+// learned from them it has put into its notes (save_note). Oldest first and
+// only as far as needed; the newest stays whole: the model is working with it.
+function compact(messages, ctx) {
+  const budget = ctx * 3.5 * 0.6
+  let size = messages.reduce((n, m) => n + (m.content?.length || 0), 0)
+  if (size <= budget) return [messages, 0]
+  const tools = messages.map((m, i) => m.role === 'tool' && m.content.length > 600 ? i : -1).filter(i => i >= 0).slice(0, -1)
+  const out = [...messages]
+  let n = 0
+  for (const i of tools) {
+    if (size <= budget) break
+    let was = {}
+    try { was = JSON.parse(out[i].content) } catch {}
+    const stub = JSON.stringify({removed_from_context: 'An older tool answer, taken out so the conversation fits. ' +
+      'Read it again if you need it; what you noted is in project_map and read_file.',
+      tool: out[i].tool_name, ...Object.fromEntries(['file', 'folder', 'query', 'name', 'url', 'title', 'lines', 'note', 'your_note']
+        .filter(k => was[k] != null && typeof was[k] !== 'object').map(k => [k, String(was[k]).slice(0, 300)]))})
+    size += stub.length - out[i].content.length
+    out[i] = {...out[i], content: stub}
+    delete out[i].images
+    n++
+  }
+  return [out, n]
 }
 
 function regenerate() {

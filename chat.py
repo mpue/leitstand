@@ -15,6 +15,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import threading
 import urllib.error
@@ -22,6 +23,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+import codeindex
 import comfytemplates
 import downloads
 import folders
@@ -35,6 +37,7 @@ CHAT_PATH = re.compile(r"/chat/chats/([0-9a-f]{32})")
 IMAGE_PATH = re.compile(r"/chat/images/(" + imagegen.MEDIA_NAME.pattern + ")")
 IMAGES = DATA / "images"
 DOWNLOADS = DATA / "downloads"
+codeindex.setup(DATA)
 DOWNLOAD_PATH = re.compile(r"/chat/downloads/([0-9a-f]{32})/([^/]+)")
 # KaTeX und highlight.js, je Version ein Verzeichnis: kein Teil beginnt mit einem Punkt
 VENDOR = PAGE.parent / "vendor"
@@ -157,7 +160,9 @@ def handle(handler, ollama, comfy):
         reply_json(handler, {"available": websearch.available()})
     elif path in ("/chat/web/search", "/chat/web/fetch") and method == "POST":
         web(handler, path.rsplit("/", 1)[1])
-    elif path in ("/chat/files/browse", "/chat/files/list", "/chat/files/read", "/chat/files/search") and method == "POST":
+    elif path in ("/chat/files/browse", "/chat/files/list", "/chat/files/read", "/chat/files/search",
+                  "/chat/files/map", "/chat/files/symbol", "/chat/files/code", "/chat/files/note",
+                  "/chat/files/status") and method == "POST":
         files(handler, path.rsplit("/", 1)[1])
     elif path == "/chat/downloads" and method == "POST":
         make_file(handler, comfy)
@@ -335,18 +340,33 @@ def web(handler, what):
 
 
 def files(handler, what):
-    """Die freigegebenen Ordner eines Chats (folders.py): die Auswahl und die Werkzeuge des Modells."""
+    """Die freigegebenen Ordner eines Chats (folders.py): die Auswahl und die Werkzeuge des
+    Modells, dazu das Projektgedaechtnis (codeindex.py): Karte, Symbole, Suche, Notizen."""
     try:
         req = json.loads(body(handler) or b"{}")
         roots = req.get("roots")
         result = (folders.browse(req.get("path")) if what == "browse"
                   else folders.listing(roots, req.get("path"), req.get("pattern") or "") if what == "list"
                   else folders.read(roots, req.get("path"), req.get("start_line") or 1) if what == "read"
-                  else folders.search(roots, req.get("query"), req.get("path")))
+                  else folders.search(roots, req.get("query"), req.get("path")) if what == "search"
+                  else codeindex.project_map(roots, req.get("path") or "") if what == "map"
+                  else codeindex.find_symbol(roots, req.get("name")) if what == "symbol"
+                  else codeindex.search_code(roots, req.get("query"), req.get("path") or "") if what == "code"
+                  else codeindex.save_note(roots, req.get("path") or "", req.get("note")) if what == "note"
+                  else {"folders": codeindex.status(roots)})
+        if what == "read" and "text" in result:
+            note = codeindex.note_for(roots, req.get("path"))
+            if note:
+                result["your_note"] = note   # was das Modell frueher ueber die Datei notiert hat
+            else:
+                result["hint"] = ("Zu dieser Datei hast du noch keine Notiz. Ist sie wichtig, halte das Wesentliche "
+                                  "mit save_note fest, bevor du antwortest -- der Inhalt fällt später aus dem Gespräch.")
     except ValueError as e:
         return reply_json(handler, {"error": str(e)}, 400)
     except OSError as e:
         return reply_json(handler, {"error": f"Nicht lesbar: {e.strerror or e}"}, 400)
+    except sqlite3.Error as e:
+        return reply_json(handler, {"error": f"Projektindex: {e}"}, 500)
     reply_json(handler, result)
 
 
