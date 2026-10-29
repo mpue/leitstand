@@ -8,7 +8,7 @@ Chats und macht aus angehaengten PDFs Text (pdftotext). Bilder und Videos
 erzeugt ComfyUI (imagegen.py); sie liegen in der Ablage unter images/. Im Internet
 sucht und liest websearch.py (SearXNG). Dateien, die das Modell zum Herunterladen
 anlegt, liegen unter downloads/ (downloads.py). Boersenkurse und Kerzen holt
-markets.py (Yahoo Finance).
+markets.py (Yahoo Finance), Musik macht ACE-Step 1.5 als eigener Dienst (music.py).
 """
 
 import ipaddress
@@ -30,6 +30,7 @@ import downloads
 import folders
 import imagegen
 import markets
+import music
 import websearch
 
 PAGE = Path(__file__).resolve().parent / "static" / "chat.html"
@@ -91,7 +92,7 @@ class ChatStore:
             # Dateien, die das Modell angelegt hat, gehen mit.
             try:
                 text = path.read_text("utf-8")
-                for name in set(re.findall(r'"images/([0-9a-f]{32}\.(?:png|mp4))"', text)):
+                for name in set(re.findall(r'"images/([0-9a-f]{32}\.(?:png|mp4|mp3))"', text)):
                     (IMAGES / name).unlink(missing_ok=True)
                 downloads.remove(DOWNLOADS, set(re.findall(r'"downloads/([0-9a-f]{32})/', text)))
             except OSError:
@@ -166,6 +167,15 @@ def handle(handler, ollama, comfy):
                   "/chat/files/map", "/chat/files/symbol", "/chat/files/code", "/chat/files/note",
                   "/chat/files/status") and method == "POST":
         files(handler, path.rsplit("/", 1)[1])
+    elif path == "/chat/music" and method == "POST":
+        compose(handler, ollama)
+    elif path == "/chat/music/status" and method == "GET":
+        reply_json(handler, music.status())
+    elif path in ("/chat/music/start", "/chat/music/stop") and method == "POST":
+        try:
+            reply_json(handler, music.start(ollama) if path.endswith("start") else music.stop())
+        except RuntimeError as e:
+            reply_json(handler, {"error": str(e)}, 409)
     elif path in ("/chat/markets/search", "/chat/markets/quote", "/chat/markets/chart",
                   "/chat/markets/resolve") and method == "POST":
         market(handler, path.rsplit("/", 1)[1])
@@ -233,6 +243,27 @@ def image(handler, ollama, comfy):
         pass  # Stopp oder Seite zu
     finally:
         states.close()   # bricht den Auftrag in ComfyUI ab, falls er noch laeuft
+
+
+def compose(handler, ollama):
+    """Ein Stueck Musik von ACE-Step (music.py), als NDJSON-Strom der Zustaende."""
+    try:
+        req = json.loads(body(handler) or b"{}")
+    except ValueError:
+        return reply_json(handler, {"error": "Ungültiges JSON"}, 400)
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/x-ndjson")
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    states = music.run(req, IMAGES, ollama)
+    try:
+        for state in states:
+            handler.wfile.write((json.dumps(state, ensure_ascii=False) + "\n").encode())
+            handler.wfile.flush()
+    except ConnectionError:
+        pass
+    finally:
+        states.close()
 
 
 def market(handler, what):
@@ -316,7 +347,7 @@ def media(handler, path):
         data = path.read_bytes()
     except OSError:
         return reply_json(handler, {"error": "Datei nicht gefunden"}, 404)
-    ctype = "video/mp4" if path.suffix == ".mp4" else "image/png"
+    ctype = {".mp4": "video/mp4", ".mp3": "audio/mpeg"}.get(path.suffix, "image/png")
     m = re.fullmatch(r"bytes=(\d*)-(\d*)", handler.headers.get("Range", "").strip())
     if not m or not (m[1] or m[2]):
         handler.send_response(200)

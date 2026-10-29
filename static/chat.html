@@ -163,7 +163,12 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border
   .quotes .rng, .mk-change .abs { display: none; }
   .quotes td { padding: 5px 4px; }
 }
-#image-mode[aria-pressed="true"], #video-mode[aria-pressed="true"], #market-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.generated audio { display: block; width: min(560px, 100%); }
+.generated .lyrics { flex-basis: 100%; }
+.generated .lyrics summary { cursor: pointer; }
+.generated .lyrics pre { white-space: pre-wrap; font: inherit; color: var(--fg); margin: 4px 0 0; max-height: 320px; overflow: auto; }
+#music-state { color: var(--fg-soft); font-size: 12px; }
+#image-mode[aria-pressed="true"], #video-mode[aria-pressed="true"], #market-mode[aria-pressed="true"], #music-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 #settings .group { grid-column: 1 / -1; margin: 4px 0 -4px; font-size: 12px; font-weight: 600; color: var(--fg-soft); text-transform: uppercase; letter-spacing: .05em; }
 #settings label.check { flex-direction: row; align-items: center; gap: 6px; }
 .error { color: var(--danger); font-size: 14px; }
@@ -359,6 +364,28 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
     <label class="web-only check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Gesucht wird über das eigene SearXNG (searxng.sh).">
       <input id="webResearch" type="checkbox"> Das Chat-Modell darf im Internet suchen und Seiten lesen
     </label>
+    <div class="group music-only" hidden>Musik (ACE-Step 1.5)</div>
+    <label class="music-only" hidden title="Auto: ACE-Step wählt die Länge passend zum Song">Länge
+      <select id="musicDuration">
+        <option value="">Auto</option>
+        <option value="30">30 Sekunden</option>
+        <option value="60">1 Minute</option>
+        <option value="120">2 Minuten</option>
+        <option value="180">3 Minuten</option>
+        <option value="240">4 Minuten</option>
+      </select>
+    </label>
+    <label class="music-only" hidden>Gesang
+      <select id="musicVocals">
+        <option value="">Sprache automatisch</option>
+        <option value="de">Deutsch</option>
+        <option value="en">Englisch</option>
+        <option value="instrumental">Instrumental, ohne Gesang</option>
+      </select>
+    </label>
+    <label class="music-only" hidden>Seed
+      <input id="musicSeed" type="number" min="0" placeholder="Zufall">
+    </label>
     <div class="group">Börse</div>
     <label class="check wide" title="Nur bei Modellen, die Werkzeuge (Tools) können. Die Kurse kommen von Yahoo Finance, je nach Börse bis 15 Minuten verzögert.">
       <input id="marketTool" type="checkbox"> Das Chat-Modell darf Kurse abfragen und Kerzencharts zeigen
@@ -386,6 +413,9 @@ dialog::backdrop { background: rgb(0 0 0 / .45); }
                 title="Die Nachricht als Videobeschreibung direkt an ComfyUI schicken (mit Ton)">🎬 Video</button>
         <button type="button" id="market-mode" class="ghost" aria-pressed="false"
                 title="Kurse und Kerzencharts sofort, ohne Sprachmodell: z. B. „Siemens“, „SAP, DAX“ oder „Nvidia 1j“ (geht auch als /kurs …)">📈 Kurs</button>
+        <button type="button" id="music-mode" class="ghost music-only" aria-pressed="false" hidden
+                title="Musik mit ACE-Step 1.5: lädt das Musikmodell (und entlädt Ollamas Modelle), die Nachricht ist dann der Prompt – Stil, darunter nach „Songtext:“ der Text, beides wörtlich. Ausschalten gibt die Grafikkarte wieder frei.">🎵 Musik</button>
+        <span id="music-state"></span>
         <input type="file" id="file" multiple hidden>
         <span class="spacer"></span>
         <span class="hint">Enter senden · Shift+Enter neue Zeile · Esc stoppt</span>
@@ -442,7 +472,7 @@ const gb = b => (b / 1e9).toFixed(b < 1e10 ? 2 : 1) + ' GB'
 let settings = {model: '', temperature: '', num_ctx: '', think: '', system: '',
   imageWorkflow: '', imageSize: '1024x1024', imageSteps: '', imageSeed: '', imageShare: true, imageTool: true,
   videoWorkflow: '', videoSize: '1344x768', videoSeconds: '5', videoTool: true,
-  webResearch: true, fileTool: true, marketTool: true}
+  webResearch: true, fileTool: true, marketTool: true, musicDuration: '', musicVocals: '', musicSeed: ''}
 try { Object.assign(settings, JSON.parse(localStorage.getItem('ollama-chat') || '{}')) } catch {}
 const saveSettings = () => localStorage.setItem('ollama-chat', JSON.stringify(settings))
 
@@ -1101,7 +1131,7 @@ function exportChat() {
   if (!chat.messages.length) return
   const md = `# ${chat.title}\n\n` + chat.messages.filter(m => m.role !== 'tool').map(m =>
     `**${m.role === 'user' ? 'Du' : m.model || 'Assistent'}:**\n\n${toOllama(m).content}` +
-    (m.generated || []).map(g => `\n\n${g.kind === 'video' ? '🎬 [Video: ' : '!['}${g.prompt.replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('') +
+    (m.generated || []).map(g => `\n\n${g.kind === 'audio' ? '🎵 [Musik: ' : g.kind === 'video' ? '🎬 [Video: ' : '!['}${(g.caption || g.prompt).replace(/[\[\]]/g, '')}](${new URL(g.url, location.href)})`).join('') +
     (m.downloads || []).map(d => `\n\n📎 [${d.name.replace(/[\[\]]/g, '')}](${new URL(d.url, location.href)})`).join('') +
     ((m.research || []).filter(s => s.kind === 'fetch' && !s.error).length
       ? '\n\nGelesen: ' + m.research.filter(s => s.kind === 'fetch' && !s.error).map(s => `[${(s.title || s.url).replace(/[\[\]]/g, '')}](${s.url})`).join(', ')
@@ -1250,6 +1280,7 @@ function renderResearch(m) {
 function renderGenerated(m) {
   const box = el('div', 'generated')
   for (const g of m.generated || []) {
+    if (g.kind === 'audio') { box.append(songFigure(g)); continue }
     const video = g.kind === 'video'
     const fig = el('figure')
     if (video) {
@@ -1351,7 +1382,8 @@ function toOllama(m) {
   let content = m.role === 'assistant' ? splitThink(m.content)[1] : m.content
   // A picture or clip made by the switch: the model hears that it exists.
   if (m.generated?.length && !m.toolCalls?.length && !content.trim())
-    content = m.generated.map(g => `[${g.kind === 'video' ? 'Video' : 'Bild'} mit ComfyUI erzeugt: „${g.prompt}“]`).join('\n')
+    content = m.generated.map(g => g.kind === 'audio' ? `[Musik mit ACE-Step erzeugt: „${g.caption || g.prompt}“${g.lyrics ? `, Songtext:\n${g.lyrics}` : ''}]`
+      : `[${g.kind === 'video' ? 'Video' : 'Bild'} mit ComfyUI erzeugt: „${g.prompt}“]`).join('\n')
   // Prices the switch fetched: the model hears the numbers, so one can ask about them.
   if (m.markets?.length && !m.toolCalls?.length && !content.trim()) content = m.markets.map(marketText).join('\n')
   const out = {role: m.role, content: [...files, content].filter(Boolean).join('\n\n')}
@@ -1373,6 +1405,14 @@ async function send() {
     autosize()
     renderChat()
     return showMarkets(ask)
+  }
+  if (mode === 'music' && text) {
+    chat.messages.push({role: 'user', content: text, musicMode: true})
+    chat.title ||= '🎵 ' + text.split('\n')[0].slice(0, 58)
+    $('#input').value = ''
+    autosize()
+    renderChat()
+    return compose(text)
   }
   if (mode && text) {
     chat.messages.push({role: 'user', content: text, ...(mode === 'video' ? {videoMode: true} : {imageMode: true})})
@@ -1478,6 +1518,158 @@ async function shrink(mime, b64, max = 1568) {
   g.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
   bitmap.close()
   return canvas.toDataURL('image/jpeg', 0.88)
+}
+
+// ---------- Music (ACE-Step 1.5, music.py) ----------
+
+let musicInstalled = false
+let musicWatch = null
+
+// The switch loads the music model (the server starts, Ollama's models leave the
+// card) and unloads it again; meanwhile the composer says how far it is.
+async function toggleMusic(on) {
+  setMode(on ? 'music' : '')
+  clearInterval(musicWatch)
+  const state = $('#music-state')
+  try {
+    if (!on) {
+      state.textContent = ''
+      const s = await json('music/status')
+      if (s.active === 'active' && !s.busy) await json('music/stop', {method: 'POST'})
+      return
+    }
+    state.textContent = 'ACE-Step startet…'
+    const s = await json('music/start', {method: 'POST'})
+    if (s.unloaded?.length) toast(`Für die Musik aus dem Grafikspeicher genommen: ${s.unloaded.join(', ')}`)
+    const t0 = Date.now()
+    const poll = async () => {
+      const st = await json('music/status').catch(() => null)
+      if (mode !== 'music') return clearInterval(musicWatch)
+      if (st?.ready) {
+        state.textContent = '🎵 bereit'
+        return clearInterval(musicWatch)
+      }
+      if (st?.active === 'failed') {
+        state.textContent = ''
+        toast('ACE-Step ist beim Start abgestürzt (Log: journalctl -u acestep)')
+        return clearInterval(musicWatch)
+      }
+      state.textContent = `${st?.up ? 'ACE-Step lädt die Musikmodelle' : 'ACE-Step startet'}… ${clock((Date.now() - t0) / 1000)}`
+    }
+    musicWatch = setInterval(poll, 1500)
+    poll()
+  } catch (e) {
+    state.textContent = ''
+    toast(`Musik: ${e.message}`)
+  }
+}
+
+async function loadMusicStatus() {
+  const s = await json('music/status').catch(() => null)
+  musicInstalled = !!s?.installed
+  for (const e of document.querySelectorAll('.music-only')) e.hidden = !musicInstalled
+}
+
+const musicSettings = () => ({
+  ...(settings.musicDuration && {duration: Number(settings.musicDuration)}),
+  ...(settings.musicVocals === 'instrumental' ? {instrumental: true} : settings.musicVocals ? {language: settings.musicVocals} : {}),
+  ...(settings.musicSeed !== '' && {seed: Number(settings.musicSeed)}),
+})
+
+// One piece of music into a new answer: ACE-Step's state, the progress as a bar, then the player.
+async function compose(text) {
+  const c = chat
+  const msg = {role: 'assistant', content: '', model: 'ACE-Step 1.5'}
+  c.messages.push(msg)
+  messagesBox.querySelector('.empty')?.remove()
+  let wrap = renderMessage(msg, c.messages.length - 1)
+  messagesBox.append(wrap)
+  messagesBox.scrollTop = messagesBox.scrollHeight
+  const redraw = () => {
+    if (chat !== c) return
+    const stick = nearBottom()
+    wrap.replaceWith(wrap = renderMessage(msg, c.messages.length - 1))
+    if (stick) messagesBox.scrollTop = messagesBox.scrollHeight
+  }
+  const ctrl = abort = new AbortController()
+  setBusy(true)
+  const t0 = performance.now()
+  let state = 'Auftrag an ACE-Step…'
+  const show = () => {
+    msg.imageState = `${state} · ${clock((performance.now() - t0) / 1000)}`
+    redraw()
+  }
+  const tick = setInterval(show, 1000)
+  show()
+  try {
+    const res = await api('music', {method: 'POST', signal: ctrl.signal, body: JSON.stringify({prompt: text, ...musicSettings()})})
+    for await (const s of ndjson(res)) {
+      if (s.state === 'done') {
+        msg.generated = s.tracks.map(t => ({kind: 'audio', prompt: s.prompt, seconds: s.seconds, ...t}))
+        break
+      }
+      if (s.state === 'error') throw new Error(s.error)
+      if (s.state === 'starting' || s.state === 'loading') {
+        state = s.state === 'starting' ? 'ACE-Step startet…' : 'ACE-Step lädt die Musikmodelle…'
+        $('#music-state').textContent = ''
+      } else if (s.state === 'writing') {
+        state = 'ACE-Step schreibt Stil und Songtext…'
+      } else if (s.state === 'queued' || s.state === 'written') {
+        state = 'ACE-Step komponiert…'
+      } else if (s.state === 'running') {
+        state = {codes: 'ACE-Step komponiert (Sprachmodell)…', sound: 'Setzt den Klang zusammen…'}[s.stage] || 'ACE-Step komponiert…'
+        if (s.progress != null) msg.imageProgress = Math.max(0, Math.min(1, s.progress))
+      }
+      show()
+    }
+    if (!msg.generated?.length) throw new Error('ACE-Step hat keine Musik geliefert')
+    if (mode === 'music') $('#music-state').textContent = '🎵 bereit'
+  } catch (e) {
+    if (e.name !== 'AbortError') msg.error = 'Musik: ' + e.message
+  } finally {
+    clearInterval(tick)
+    delete msg.imageState
+    delete msg.imageProgress
+    if (abort === ctrl) {
+      abort = null
+      setBusy(false)
+    }
+    c.updated = Date.now()
+    redraw()
+    await saveChat(c)
+  }
+}
+
+// A song: the player, what it is (ACE-Step's caption, or the description), its key
+// figures, the lyrics to unfold, download and taking the seed over.
+function songFigure(g) {
+  const fig = el('figure')
+  const audio = el('audio')
+  audio.src = g.url
+  audio.controls = true
+  audio.preload = 'metadata'
+  fig.append(audio)
+  const cap = el('figcaption')
+  const dl = el('a', '', 'Herunterladen')
+  dl.href = g.url
+  dl.download = `${(g.caption || g.prompt || 'musik').slice(0, 40).replace(/[^\w äöüÄÖÜß-]+/g, '').trim() || 'musik'}-${g.seed ?? ''}.mp3`
+  cap.append(el('span', 'p', g.caption || g.prompt),
+    el('span', '', ['ACE-Step 1.5', g.duration && `${Math.round(g.duration)} s`, g.bpm && `${g.bpm} BPM`, g.key,
+      g.language && g.language !== 'unknown' && `Gesang: ${g.language}`, g.seed != null && `Seed ${g.seed}`,
+      g.seconds && `in ${clock(g.seconds)}`].filter(Boolean).join(' · ')),
+    dl, action('Beschreibung kopieren', b => copy(g.prompt, b)))
+  if (g.seed != null) cap.append(action('Seed übernehmen', () => {
+    settings.musicSeed = $('#musicSeed').value = String(g.seed)
+    saveSettings()
+    toast(`Seed ${g.seed} gilt für die nächste Musik`)
+  }))
+  if (g.lyrics && g.lyrics !== '[Instrumental]') {
+    const d = el('details', 'lyrics')
+    d.append(el('summary', '', 'Songtext'), el('pre', '', g.lyrics))
+    cap.append(d)
+  }
+  fig.append(cap)
+  return fig
 }
 
 // ---------- Stock market ----------
@@ -2373,7 +2565,8 @@ function regenerate() {
   while (chat.messages.length && chat.messages.at(-1).role !== 'user') chat.messages.pop()
   renderChat()
   const last = chat.messages.at(-1)
-  if (last?.marketMode) showMarkets(last.content.replace(/^\/(?:kurs|k|chart)\s+/i, ''))
+  if (last?.musicMode) compose(last.content)
+  else if (last?.marketMode) showMarkets(last.content.replace(/^\/(?:kurs|k|chart)\s+/i, ''))
   else if (last?.videoMode) paint('video')
   else if (last?.imageMode) paint('image')
   else generate()
@@ -2383,7 +2576,7 @@ function editMessage(i) {
   if (abort) return
   const m = chat.messages[i]
   chat.messages.splice(i)
-  setMode(m.marketMode ? 'market' : m.videoMode ? 'video' : m.imageMode ? 'image' : '')
+  setMode(m.musicMode ? 'music' : m.marketMode ? 'market' : m.videoMode ? 'video' : m.imageMode ? 'image' : '')
   $('#input').value = m.content
   pendingImages = m.images || []
   pendingFiles = m.files || []
@@ -2535,6 +2728,7 @@ $('#folder-share').onclick = () => {
 $('#image-mode').onclick = () => { setMode(mode === 'image' ? '' : 'image'); $('#input').focus() }
 $('#video-mode').onclick = () => { setMode(mode === 'video' ? '' : 'video'); $('#input').focus() }
 $('#market-mode').onclick = () => { setMode(mode === 'market' ? '' : 'market'); $('#input').focus() }
+$('#music-mode').onclick = () => { toggleMusic(mode !== 'music'); $('#input').focus() }
 $('#file').onchange = e => { addFiles([...e.target.files]); e.target.value = '' }
 $('#model').onchange = () => selectModel()
 $('#new-chat').onclick = newChat
@@ -2559,7 +2753,7 @@ messagesBox.addEventListener('click', e => {
 })
 
 for (const id of ['temperature', 'num_ctx', 'think', 'imageWorkflow', 'imageSize', 'imageSteps', 'imageSeed',
-  'videoWorkflow', 'videoSize', 'videoSeconds']) {
+  'videoWorkflow', 'videoSize', 'videoSeconds', 'musicDuration', 'musicVocals', 'musicSeed']) {
   const input = $('#' + id)
   input.value = settings[id]
   input.onchange = () => { settings[id] = input.value; saveSettings() }
@@ -2571,12 +2765,15 @@ for (const id of ['imageShare', 'imageTool', 'videoTool', 'webResearch', 'fileTo
 }
 
 function setMode(m) {
-  mode = m === 'image' && imageWorkflows.length || m === 'video' && videoWorkflows.length || m === 'market' ? m : ''
+  mode = m === 'image' && imageWorkflows.length || m === 'video' && videoWorkflows.length || m === 'market'
+    || m === 'music' && musicInstalled ? m : ''
+  $('#music-mode').setAttribute('aria-pressed', String(mode === 'music'))
   $('#image-mode').setAttribute('aria-pressed', String(mode === 'image'))
   $('#video-mode').setAttribute('aria-pressed', String(mode === 'video'))
   $('#market-mode').setAttribute('aria-pressed', String(mode === 'market'))
   $('#input').placeholder = mode === 'image' ? 'Bild beschreiben (Englisch klappt am besten)…'
     : mode === 'market' ? 'Wertpapiere, durch Komma getrennt: „Siemens“, „SAP, DAX“, „Nvidia 1j“, „BTC-EUR 5t“…'
+    : mode === 'music' ? 'Stil („melancholischer Indie-Rock, Frauenstimme, Gitarren“), darunter „Songtext:“ und der Text – ACE-Step bekommt beides wörtlich…'
     : mode === 'video' ? 'Video beschreiben: Szene, Kamera, Handlung, dazu „Audio:“ für Ton und Sprache (Englisch klappt am besten)…'
     : $('#model').value ? `Nachricht an ${$('#model').value}…` : 'Erst ein Modell herunterladen (oben rechts: Modelle)'
 }
@@ -2635,7 +2832,7 @@ $('#system').oninput = () => {
 
 async function init() {
   chat = {id: newId(), title: '', model: '', system: settings.system, messages: [], created: Date.now(), updated: Date.now()}
-  await Promise.all([loadModels(), loadChats(), loadImageWorkflows(), loadWebStatus()])
+  await Promise.all([loadModels(), loadChats(), loadImageWorkflows(), loadWebStatus(), loadMusicStatus()])
   const id = location.hash.slice(1)
   if (chats.some(c => c.id === id)) await openChat(id)
   else newChat()

@@ -39,7 +39,7 @@ from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parent / "workflows"
 WORKFLOW_ID = re.compile(r"[a-z0-9][a-z0-9_-]*")
-MEDIA_NAME = re.compile(r"[0-9a-f]{32}\.(png|mp4)")
+MEDIA_NAME = re.compile(r"[0-9a-f]{32}\.(png|mp4|mp3)")   # mp3: Musik von music.py
 START_TIMEOUT = 120      # ComfyUI braucht beim ersten Start eine Weile
 RUN_TIMEOUT = 600        # ein Workflow kann mehr verlangen ("timeout")
 

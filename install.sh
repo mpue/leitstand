@@ -2,7 +2,9 @@
 # Richtet den Leitstand ein (mit sudo ausfuehren):
 #  - leitstand.service: der Webserver auf Port 8100, laeuft als dein Benutzer, startet beim Booten
 #  - comfyui.service:   ComfyUI als Dienst (ohne Autostart), lauscht im LAN auf 8188
-#  - polkit-Regel:      dein Benutzer darf ollama/comfyui ohne Passwort starten/stoppen
+#  - acestep.service:   ACE-Step 1.5 (Musik) als Dienst, ohne Autostart, nur lokal auf 8001;
+#                       der Musik-Schalter im Chat startet und stoppt ihn
+#  - polkit-Regel:      dein Benutzer darf ollama/comfyui/acestep ohne Passwort starten/stoppen
 #  - Leitstand-Node in ComfyUI/custom_nodes (meldet die geladenen Modelle)
 #  - ufw-Regeln fuer 8100 und 8188 aus dem Heimnetz (greifen, sobald ufw aktiv ist)
 set -e
@@ -14,7 +16,9 @@ fi
 
 USER_NAME=${SUDO_USER:?SUDO_USER fehlt, bitte per sudo starten}
 HERE=$(cd "$(dirname "$0")" && pwd)
-COMFY_DIR=${COMFY_DIR:-$(getent passwd "$USER_NAME" | cut -d: -f6)/Documents/devel/ComfyUI}
+USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
+COMFY_DIR=${COMFY_DIR:-$USER_HOME/Documents/devel/ComfyUI}
+ACE_DIR=${ACE_DIR:-$USER_HOME/Documents/devel/ACE-Step-1.5}
 LAN=${LAN:-192.168.178.0/24}
 
 cat > /etc/systemd/system/leitstand.service <<EOF
@@ -52,12 +56,34 @@ TimeoutStopSec=30
 WantedBy=multi-user.target
 EOF
 
+if [ -x "$ACE_DIR/.venv/bin/acestep-api" ]; then
+cat > /etc/systemd/system/acestep.service <<EOF
+[Unit]
+Description=ACE-Step 1.5 (Musik)
+After=network-online.target
+
+[Service]
+User=$USER_NAME
+WorkingDirectory=$ACE_DIR
+ExecStart=$ACE_DIR/.venv/bin/acestep-api --host 127.0.0.1 --port 8001
+Environment=PYTHONUNBUFFERED=1
+Environment=ACESTEP_INIT_LLM=auto
+Environment=ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
 cat > /etc/polkit-1/rules.d/50-leitstand.rules <<EOF
-// Leitstand: $USER_NAME darf Ollama und ComfyUI ohne Passwort starten/stoppen.
+// Leitstand: $USER_NAME darf Ollama, ComfyUI und ACE-Step ohne Passwort starten/stoppen.
 polkit.addRule(function (action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" && subject.user == "$USER_NAME") {
         var unit = action.lookup("unit"), verb = action.lookup("verb");
-        if ((unit == "ollama.service" || unit == "comfyui.service") &&
+        if ((unit == "ollama.service" || unit == "comfyui.service" || unit == "acestep.service") &&
             (verb == "start" || verb == "stop" || verb == "restart")) {
             return polkit.Result.YES;
         }
